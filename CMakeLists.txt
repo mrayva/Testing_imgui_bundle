@@ -12,9 +12,24 @@ FetchContent_Declare(
     GIT_TAG        main # Or a specific version/commit
 )
 
-# Disable problematic features for initial build
-set(HELLOIMGUI_USE_FREETYPE OFF CACHE BOOL "" FORCE)
+# Enable FreeType for high-quality font rendering
+set(HELLOIMGUI_USE_FREETYPE ON CACHE BOOL "" FORCE)
 set(HELLOIMGUI_WITH_TEST_ENGINE OFF CACHE BOOL "" FORCE)
+
+# Find plutosvg and its dependencies via vcpkg
+find_package(plutovg CONFIG REQUIRED)
+find_package(plutosvg CONFIG REQUIRED)
+# Create aliases so that imgui_bundle can find them by their short names
+if (NOT TARGET plutosvg)
+    add_library(plutosvg ALIAS plutosvg::plutosvg)
+endif()
+if (NOT TARGET plutovg)
+    add_library(plutovg ALIAS plutovg::plutovg)
+endif()
+
+# Workaround for header locations (they are in subdirs in vcpkg)
+include_directories(${CMAKE_BINARY_DIR}/vcpkg_installed/x64-linux/include/plutosvg)
+include_directories(${CMAKE_BINARY_DIR}/vcpkg_installed/x64-linux/include/plutovg)
 
 # Enable Backends
 set(HELLOIMGUI_USE_GLFW3 ON CACHE BOOL "" FORCE)
@@ -34,6 +49,11 @@ add_executable(${PROJECT_NAME} main.cpp)
 
 # Link against imgui_bundle.
 target_link_libraries(${PROJECT_NAME} PRIVATE imgui_bundle)
+
+# Link plutosvg and plutovg via imported targets
+target_link_libraries(${PROJECT_NAME} PRIVATE plutosvg::plutosvg plutovg::plutovg freetype)
+
+
 
 # Link against reaction
 find_package(reaction CONFIG REQUIRED)
