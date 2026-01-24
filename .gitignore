@@ -1,0 +1,35 @@
+# Build artifacts
+build/
+bin/
+lib/
+*.o
+*.obj
+*.a
+*.lib
+*.so
+*.dylib
+*.dll
+*.exe
+
+# vcpkg
+vcpkg_installed/
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# ImGui Bundle generated files
+ImGui_Bundle_Kitchen_Sink.ini
+
+# Antigravity artifacts
+.gemini/
+brain/
+task.md
+implementation_plan.md
+walkthrough.md
