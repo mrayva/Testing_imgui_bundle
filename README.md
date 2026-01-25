@@ -8,24 +8,23 @@ A proof-of-concept C++ project integrating cutting-edge libraries using **C++23*
 - **Reaction (Reactive Programming)**: A lightweight, header-only reactive framework for C++20/23.
 - **sqlpp23 (Type-safe SQL)**: A type-safe embedded domain-specific language for SQL queries, pushing C++23 features to their limit.
 - **SQLite3 Integration**: In-memory database support using `sqlpp23`.
+- **Cross-Platform Font Loading**: Automatic detection of system fonts on Windows, macOS, and Linux.
+- **WebAssembly Support**: Full support for building as a web application via Emscripten.
 
 ## 🛠 Prerequisites
 
 - **Compiler**: Clang 20+ or GCC 14+ (required for full C++23 support). 
-  - *Note: GCC 15 currently has issues with `sqlpp23`'s implementation.*
+  - *Note: GCC 14 is recommended for native builds to avoid current GCC 15 bugs.*
 - **Package Manager**: [vcpkg](https://github.com/microsoft/vcpkg)
 - **Build System**: CMake 3.28+ and Ninja.
+- **WASM Build**: [Emscripten SDK (emsdk)](https://emscripten.org/docs/getting_started/downloads.html)
 
 ## 🏗 Build Instructions
 
-1. **Clone the repository**:
-   ```bash
-   git clone <repository-url>
-   cd testimguibundle
-   ```
+### Native (Linux/Windows/macOS)
 
-2. **Configure and Build**:
-   Ensure `vcpkg` is installed and the toolchain path is correctly specified for your environment.
+1. **Configure and Build**:
+   Ensure `vcpkg` is installed and the toolchain path is correctly specified.
 
    ```bash
    cmake -B build -S . \
@@ -36,10 +35,14 @@ A proof-of-concept C++ project integrating cutting-edge libraries using **C++23*
    cmake --build build
    ```
 
-3. **Run**:
+2. **Run**:
    ```bash
    ./build/KitchenSinkImgui
    ```
+
+### Web/WASM (Emscripten)
+
+See the detailed [WASM Build Guide](.agent/workflows/wasm-build.md) for instructions on building for the web.
 
 ## 📜 License
 

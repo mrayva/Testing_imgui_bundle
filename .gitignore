@@ -26,6 +26,10 @@ Thumbs.db
 
 # ImGui Bundle generated files
 ImGui_Bundle_Kitchen_Sink.ini
+ImGui_Bundle_Kitchen_Sink.node_editor.json
+
+# WASM build artifacts
+build_wasm/
 
 # Antigravity artifacts
 .gemini/

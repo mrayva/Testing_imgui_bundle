@@ -1,3 +1,4 @@
+#include <exception>
 #include "immapp/immapp.h"
 #include "imgui.h"
 #include "imgui_internal.h"
@@ -17,6 +18,28 @@ namespace ed = ax::NodeEditor;
 
 static std::vector<std::string> g_FontNames = {"Default Font"};
 static int g_GlobalFontIdx = 0;
+
+// Global sqlpp23 Database State
+static std::unique_ptr<sqlpp::sqlite3::connection> g_db;
+static std::string g_db_last_error;
+static std::vector<std::string> g_db_results;
+
+void InitDb() {
+    try {
+        sqlpp::sqlite3::connection_config config;
+        config.path_to_database = ":memory:";
+        config.flags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE;
+        g_db = std::make_unique<sqlpp::sqlite3::connection>(config);
+
+        // Create table
+        (*g_db)("CREATE TABLE foo (id BIGINT, name TEXT, has_fun BOOLEAN)");
+        
+        // Seed with some initial data
+        (*g_db)(insert_into(test_db::foo).set(test_db::foo.Id = 1, test_db::foo.Name = "Initial User", test_db::foo.HasFun = true));
+    } catch (const std::exception& e) {
+        g_db_last_error = e.what();
+    }
+}
 
 void Gui() {
     auto& io = ImGui::GetIO();
@@ -98,62 +121,42 @@ void Gui() {
 
         // sqlpp23 Demo
         if (ImGui::CollapsingHeader("Type-safe SQL (sqlpp23) Example")) {
-            static std::unique_ptr<sqlpp::sqlite3::connection> db;
-            static std::string last_error;
-            static std::vector<std::string> results;
-
-            if (!db) {
-                try {
-                    sqlpp::sqlite3::connection_config config;
-                    config.path_to_database = ":memory:";
-                    config.flags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE;
-                    db = std::make_unique<sqlpp::sqlite3::connection>(config);
-
-                    // Create table
-                    (*db)("CREATE TABLE foo (id BIGINT, name TEXT, has_fun BOOLEAN)");
-                } catch (const std::exception& e) {
-                    last_error = e.what();
-                }
-            }
-
-            if (db) {
+            if (g_db) {
                 if (ImGui::Button("Insert Random Row")) {
-                    static int next_id = 1;
+                    static int next_id = 100; // Start higher to avoid collision with seed
                     try {
                         auto name = "User " + std::to_string(next_id);
-                        (*db)(insert_into(test_db::foo).set(test_db::foo.Id = next_id++, test_db::foo.Name = name, test_db::foo.HasFun = true));
+                        (*g_db)(insert_into(test_db::foo).set(test_db::foo.Id = next_id++, test_db::foo.Name = name, test_db::foo.HasFun = true));
                     } catch (const std::exception& e) {
-                        last_error = e.what();
+                        g_db_last_error = e.what();
                     }
                 }
 
                 ImGui::SameLine();
                 if (ImGui::Button("Select All Rows")) {
-                    results.clear();
+                    g_db_results.clear();
                     try {
-                        for (const auto& row : (*db)(select(test_db::foo.Id, test_db::foo.Name).from(test_db::foo))) {
-                            results.push_back("ID: " + std::to_string(row.Id) + ", Name: " + std::string(row.Name));
+                        for (const auto& row : (*g_db)(select(test_db::foo.Id, test_db::foo.Name).from(test_db::foo))) {
+                            g_db_results.push_back("ID: " + std::to_string(row.Id) + ", Name: " + std::string(row.Name));
                         }
                     } catch (const std::exception& e) {
-                        last_error = e.what();
+                        g_db_last_error = e.what();
                     }
                 }
 
-
-
-
-                if (!last_error.empty()) {
-                    ImGui::TextColored(ImVec4(1, 0, 0, 1), "Error: %s", last_error.c_str());
-                    if (ImGui::Button("Clear Error")) last_error.clear();
+                if (!g_db_last_error.empty()) {
+                    ImGui::TextColored(ImVec4(1, 0, 0, 1), "Error: %s", g_db_last_error.c_str());
+                    if (ImGui::Button("Clear Error")) g_db_last_error.clear();
                 }
 
                 ImGui::Separator();
                 ImGui::Text("Results:");
-                for (const auto& res : results) {
+                for (const auto& res : g_db_results) {
                     ImGui::Text("- %s", res.c_str());
                 }
             } else {
-                ImGui::TextColored(ImVec4(1, 0, 0, 1), "Database not initialized: %s", last_error.c_str());
+                ImGui::TextColored(ImVec4(1, 0, 0, 1), "Database not initialized: %s", g_db_last_error.c_str());
+                if (ImGui::Button("Retry Init")) InitDb();
             }
         }
 
@@ -235,6 +238,8 @@ void Gui() {
 
 
 int main(int, char**) {
+    InitDb();
+
     // ImmApp handles the setup of HelloImGui, ImGui, Implot, etc.
     HelloImGui::RunnerParams runnerParams;
     runnerParams.callbacks.ShowGui = Gui;
@@ -246,19 +251,55 @@ int main(int, char**) {
         auto& io = ImGui::GetIO();
         io.Fonts->AddFontDefault();
         
-        std::string root = "/usr/share/fonts/truetype";
-        if (std::filesystem::exists(root)) {
-            int count = 0;
-            for (const auto& entry : std::filesystem::recursive_directory_iterator(root)) {
-                if (count >= 100) break; // Safety cap
-                if (entry.path().extension() == ".ttf") {
+        std::vector<std::string> fontRoots;
+#ifdef _WIN32
+        fontRoots.push_back("C:\\Windows\\Fonts");
+#elif defined(__APPLE__)
+        fontRoots.push_back("/Library/Fonts");
+        fontRoots.push_back("/System/Library/Fonts");
+        fontRoots.push_back("~/Library/Fonts");
+#elif defined(__EMSCRIPTEN__)
+        fontRoots.push_back("fonts");
+#else
+        fontRoots.push_back("/usr/share/fonts/truetype");
+        fontRoots.push_back("/usr/share/fonts/opentype");
+        fontRoots.push_back("~/.local/share/fonts");
+#endif
+
+        int count = 0;
+        for (const auto& root : fontRoots) {
+            if (std::filesystem::exists(root)) {
+                for (const auto& entry : std::filesystem::recursive_directory_iterator(root, std::filesystem::directory_options::skip_permission_denied)) {
+                    if (count >= 100) break; // Safety cap
+                    auto ext = entry.path().extension().string();
+                    if (ext == ".ttf" || ext == ".otf" || ext == ".TTF" || ext == ".OTF") {
+                        if (io.Fonts->AddFontFromFileTTF(entry.path().string().c_str(), 18.0f)) {
+                            g_FontNames.push_back(entry.path().filename().string());
+                            count++;
+                        }
+                    }
+                }
+            }
+            if (count >= 100) break;
+        }
+#ifdef __EMSCRIPTEN__
+        // Assets fonts will be loaded via AssetExists/LoadFont if we want to be explicit,
+        // but scan-based loading is already handled by the logic above if the path is correct.
+        // In Emscripten, the assets are preloaded into "/assets"
+        std::string assetRoot = "/assets/fonts";
+        if (std::filesystem::exists(assetRoot)) {
+            for (const auto& entry : std::filesystem::recursive_directory_iterator(assetRoot)) {
+                if (count >= 100) break;
+                auto ext = entry.path().extension().string();
+                if (ext == ".ttf" || ext == ".otf" || ext == ".TTF" || ext == ".OTF") {
                     if (io.Fonts->AddFontFromFileTTF(entry.path().string().c_str(), 18.0f)) {
-                        g_FontNames.push_back(entry.path().filename().string());
+                        g_FontNames.push_back(entry.path().filename().string() + " (WASM Asset)");
                         count++;
                     }
                 }
             }
         }
+#endif
     };
 
 

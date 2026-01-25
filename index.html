@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>ImGui Bundle Kitchen Sink</title>
+    <style>
+        body { margin: 0; background-color: #1a1a1a; color: white; display: flex; justify-content: center; align-items: center; height: 100vh; overflow: hidden; font-family: sans-serif; }
+        #canvas { background-color: black; width: 100%; height: 100%; border: none; }
+        #status { position: absolute; top: 10px; left: 10px; color: #888; }
+    </style>
+</head>
+<body>
+    <div id="status">Loading...</div>
+    <canvas id="canvas" oncontextmenu="event.preventDefault()"></canvas>
+    <script type="text/javascript">
+        var statusElement = document.getElementById('status');
+        var Module = {
+            preRun: [],
+            postRun: [],
+            print: (function() { return function(text) { console.log(text); }; })(),
+            canvas: (function() {
+                var canvas = document.getElementById('canvas');
+                canvas.addEventListener("webglcontextlost", function(e) { alert('WebGL context lost. You will need to reload the page.'); e.preventDefault(); }, false);
+                return canvas;
+            })(),
+            setStatus: function(text) {
+                if (!Module.setStatus.last) Module.setStatus.last = { time: Date.now(), text: '' };
+                if (text === Module.setStatus.last.text) return;
+                var m = text.match(/([^(]+)\((\d+(\.\d+)?)\/(\d+)\)/);
+                var now = Date.now();
+                if (m && now - Module.setStatus.last.time < 30) return;
+                Module.setStatus.last.time = now;
+                Module.setStatus.last.text = text;
+                statusElement.innerHTML = text;
+                if (text === '') statusElement.style.display = 'none';
+            },
+            totalDependencies: 0,
+            monitorRunDependencies: function(left) {
+                this.totalDependencies = Math.max(this.totalDependencies, left);
+                Module.setStatus(left ? 'Preparing... (' + (this.totalDependencies-left) + '/' + this.totalDependencies + ')' : 'All downloads complete.');
+            }
+        };
+        Module.setStatus('Downloading...');
+        window.onerror = function(event) {
+            Module.setStatus('Exception thrown, see JavaScript console');
+            Module.setStatus = function(text) { if (text) console.error('[post-exception status] ' + text); };
+        };
+    </script>
+    <script async src="KitchenSinkImgui.js"></script>
+</body>
+</html>
