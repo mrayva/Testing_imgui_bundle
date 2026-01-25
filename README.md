@@ -11,8 +11,8 @@ A proof-of-concept C++ project integrating cutting-edge libraries using **C++23*
 
 ## 🛠 Prerequisites
 
-- **Compiler**: Clang 20 or later (required for full C++23 "Deducing This" support). 
-  - *Note: GCC 15 currently has lookup bugs with `sqlpp23`'s implementation.*
+- **Compiler**: Clang 20+ or GCC 14+ (required for full C++23 support). 
+  - *Note: GCC 15 currently has issues with `sqlpp23`'s implementation.*
 - **Package Manager**: [vcpkg](https://github.com/microsoft/vcpkg)
 - **Build System**: CMake 3.28+ and Ninja.
 
@@ -25,12 +25,13 @@ A proof-of-concept C++ project integrating cutting-edge libraries using **C++23*
    ```
 
 2. **Configure and Build**:
-   I've configured the project to use your local vcpkg. Ensure the toolchain path is correct for your environment.
+   Ensure `vcpkg` is installed and the toolchain path is correctly specified for your environment.
 
    ```bash
    cmake -B build -S . \
-     -DCMAKE_TOOLCHAIN_FILE=/home/mrayva/vcpkg/scripts/buildsystems/vcpkg.cmake \
-     -DCMAKE_CXX_COMPILER=clang++ \
+     -DCMAKE_TOOLCHAIN_FILE=[path/to/vcpkg]/scripts/buildsystems/vcpkg.cmake \
+     -DCMAKE_CXX_COMPILER=g++-14 \
+     -DCMAKE_C_COMPILER=gcc-14 \
      -GNinja
    cmake --build build
    ```
