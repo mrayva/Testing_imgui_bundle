@@ -16,7 +16,7 @@ A proof-of-concept C++ project integrating cutting-edge libraries using **C++23*
 - **Compiler**: Clang 20+ or GCC 14+ (required for full C++23 support). 
   - *Note: GCC 14 is recommended for native builds to avoid current GCC 15 bugs.*
 - **Package Manager**: [vcpkg](https://github.com/microsoft/vcpkg)
-- **Build System**: CMake 3.28+ and Ninja.
+- **Build System**: CMake 3.28+ and **Ninja** (highly recommended for WASM).
 - **WASM Build**: [Emscripten SDK (emsdk)](https://emscripten.org/docs/getting_started/downloads.html)
 
 ## 🏗 Build Instructions
@@ -29,20 +29,20 @@ A proof-of-concept C++ project integrating cutting-edge libraries using **C++23*
    ```bash
    cmake -B build -S . \
      -DCMAKE_TOOLCHAIN_FILE=[path/to/vcpkg]/scripts/buildsystems/vcpkg.cmake \
-     -DCMAKE_CXX_COMPILER=g++-14 \
-     -DCMAKE_C_COMPILER=gcc-14 \
      -GNinja
    cmake --build build
    ```
 
-2. **Run**:
-   ```bash
-   ./build/KitchenSinkImgui
-   ```
-
 ### Web/WASM (Emscripten)
 
-See the detailed [WASM Build Guide](.agent/workflows/wasm-build.md) for instructions on building for the web.
+Modern WASM builds using `vcpkg` and `imgui_bundle` on Windows require specific steps to handle dependencies and generators correctly.
+
+**Brief Steps for Windows**:
+1. Run `emsdk_env.bat` to activate Emscripten.
+2. Use `-G Ninja` in your CMake command.
+3. Use the `wasm32-emscripten` vcpkg triplet.
+
+See the [Detailed WASM Build Guide](.agent/workflows/wasm-build.md) for the exact commands.
 
 ## 📜 License
 

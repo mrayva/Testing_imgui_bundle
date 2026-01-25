@@ -11,7 +11,9 @@
             "features": [
                 "freetype"
             ]
-        }
+        },
+        "plutovg",
+        "freetype"
     ],
     "builtin-baseline": "4f326c4072038c8624c36a8ba5ed23f616adda53"
 }

@@ -21,9 +21,19 @@ FetchContent_Declare(
 set(HELLOIMGUI_USE_FREETYPE ON CACHE BOOL "" FORCE)
 set(HELLOIMGUI_WITH_TEST_ENGINE OFF CACHE BOOL "" FORCE)
 
+# Workaround for WASM: plutovg Config requires Threads
+if (EMSCRIPTEN)
+    list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
+endif()
+
 # Find plutosvg and its dependencies via vcpkg
+message(STATUS "Searching for plutovg...")
 find_package(plutovg CONFIG REQUIRED)
+message(STATUS "Found plutovg: ${plutovg_DIR}")
+
+message(STATUS "Searching for plutosvg...")
 find_package(plutosvg CONFIG REQUIRED)
+message(STATUS "Found plutosvg: ${plutosvg_DIR}")
 
 # Create aliases so that imgui_bundle can find them by their short names
 if (NOT TARGET plutosvg)
@@ -39,6 +49,11 @@ if (NOT EMSCRIPTEN)
     # Only use these if not on Emscripten, and ideally these should be dynamic
     # find_package should handle this, but if vcpkg is used, it sets the include dirs
 endif()
+
+# Disable unused/problematic imgui_bundle components
+set(IMGUI_BUNDLE_WITH_IMMVISION OFF CACHE BOOL "" FORCE)
+set(IMMVISION_FETCH_OPENCV OFF CACHE BOOL "" FORCE)
+set(IMGUI_BUNDLE_WITH_IMGUI_TEX_INSPECT OFF CACHE BOOL "" FORCE)
 
 # Enable Backends
 set(HELLOIMGUI_USE_GLFW3 ON CACHE BOOL "" FORCE)
