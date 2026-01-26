@@ -76,6 +76,11 @@ else()
     set(NATS_SOURCES nats_client_native.cpp)
     find_package(OpenSSL REQUIRED)
     find_package(cnats CONFIG REQUIRED)
+    if (TARGET cnats::nats_static)
+        message(STATUS "Found cnats::nats_static target")
+    else()
+        message(WARNING "cnats CONFIG package found but cnats::nats_static target missing!")
+    endif()
 endif()
 
 add_executable(${PROJECT_NAME} main.cpp ${NATS_SOURCES})
@@ -118,9 +123,13 @@ target_link_libraries(${PROJECT_NAME} PRIVATE reaction::reaction)
 find_package(SQLite3 REQUIRED)
 target_link_libraries(${PROJECT_NAME} PRIVATE sqlpp23 sqlpp23_sqlite3)
 
-# Link NATS for native
+# Link NATS for native (cnats is found above in the NATS Client logic section)
 if (NOT EMSCRIPTEN)
-    target_link_libraries(${PROJECT_NAME} PRIVATE cnats::nats_static)
+    if (TARGET cnats::nats_static)
+        target_link_libraries(${PROJECT_NAME} PRIVATE cnats::nats_static)
+    else()
+        message(FATAL_ERROR "cnats::nats_static target not found. Make sure vcpkg has installed cnats.")
+    endif()
 endif()
 
 
