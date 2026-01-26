@@ -13,6 +13,7 @@
 #include "table_foo.h"
 #include <iostream>
 #include <filesystem>
+#include "nats_client.h"
 
 namespace ed = ax::NodeEditor;
 
@@ -23,6 +24,13 @@ static int g_GlobalFontIdx = 0;
 static std::unique_ptr<sqlpp::sqlite3::connection> g_db;
 static std::string g_db_last_error;
 static std::vector<std::string> g_db_results;
+
+// NATS State
+static NatsClient g_natsClient;
+static char g_natsUrl[256] = "wss://demo.nats.io:8443";
+static char g_natsSubject[256] = "imgui.demo";
+static char g_natsMessage[256] = "Hello from ImGui!";
+static std::vector<std::string> g_natsLog;
 
 void InitDb() {
     try {
@@ -227,6 +235,58 @@ void Gui() {
 
 
 
+
+        // NATS Demo
+        if (ImGui::CollapsingHeader("NATS Messaging Example")) {
+            ImGui::InputText("NATS URL", g_natsUrl, sizeof(g_natsUrl));
+            if (ImGui::Button("Connect")) {
+                g_natsClient.Connect(g_natsUrl);
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("Disconnect")) {
+                g_natsClient.Disconnect();
+            }
+
+            ImGui::Text("Status: %s", g_natsClient.GetConnectionStatus().c_str());
+            std::string lastErr = g_natsClient.GetLastError();
+            if (!lastErr.empty()) {
+                ImGui::TextColored(ImVec4(1, 0, 0, 1), "Error: %s", lastErr.c_str());
+            }
+
+            ImGui::Separator();
+            ImGui::InputText("Subject", g_natsSubject, sizeof(g_natsSubject));
+            if (ImGui::Button("Subscribe")) {
+                g_natsClient.Subscribe(g_natsSubject);
+                g_natsLog.push_back("Subscribed to " + std::string(g_natsSubject));
+            }
+
+            ImGui::Separator();
+            ImGui::InputText("Message", g_natsMessage, sizeof(g_natsMessage));
+            if (ImGui::Button("Publish")) {
+                g_natsClient.Publish(g_natsSubject, g_natsMessage);
+                g_natsLog.push_back("Published to " + std::string(g_natsSubject));
+            }
+
+            ImGui::Separator();
+            ImGui::Text("NATS Log / Messages:");
+            
+            // Poll for new messages
+            auto newMsgs = g_natsClient.PollMessages();
+            for (const auto& m : newMsgs) {
+                g_natsLog.push_back("[" + m.subject + "] " + m.data);
+            }
+
+            if (ImGui::BeginChild("NatsLog", ImVec2(0, 200), true)) {
+                for (const auto& entry : g_natsLog) {
+                    ImGui::TextUnformatted(entry.c_str());
+                }
+                if (ImGui::GetScrollY() >= ImGui::GetScrollMaxY())
+                    ImGui::SetScrollHereY(1.0f);
+            }
+            ImGui::EndChild();
+            
+            if (ImGui::Button("Clear Log")) g_natsLog.clear();
+        }
 
     }
     ImGui::End();

@@ -69,7 +69,16 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(imgui_bundle sqlpp23)
 
-add_executable(${PROJECT_NAME} main.cpp)
+# NATS Client logic
+if (EMSCRIPTEN)
+    set(NATS_SOURCES nats_client_wasm.cpp)
+else()
+    set(NATS_SOURCES nats_client_native.cpp)
+    find_package(OpenSSL REQUIRED)
+    find_package(cnats CONFIG REQUIRED)
+endif()
+
+add_executable(${PROJECT_NAME} main.cpp ${NATS_SOURCES})
 
 # Link against imgui_bundle.
 target_link_libraries(${PROJECT_NAME} PRIVATE imgui_bundle)
@@ -84,6 +93,8 @@ if (EMSCRIPTEN)
     target_link_options(${PROJECT_NAME} PRIVATE
         "-sUSE_GLFW=3"
         "-sASSERTIONS=1"
+        "-sEXPORTED_RUNTIME_METHODS=['UTF8ToString','stringToUTF8', 'lengthBytesUTF8']"
+        "-sEXPORTED_FUNCTIONS=['_OnNatsMessageJS','_OnNatsStatusJS','_OnNatsErrorJS','_main', '_malloc', '_free']"
         "--preload-file" "${CMAKE_CURRENT_SOURCE_DIR}/assets@assets"
     )
 endif()
@@ -106,6 +117,11 @@ target_link_libraries(${PROJECT_NAME} PRIVATE reaction::reaction)
 # sqlpp23::sqlite3 requires sqlite3 to be found
 find_package(SQLite3 REQUIRED)
 target_link_libraries(${PROJECT_NAME} PRIVATE sqlpp23 sqlpp23_sqlite3)
+
+# Link NATS for native
+if (NOT EMSCRIPTEN)
+    target_link_libraries(${PROJECT_NAME} PRIVATE cnats::nats_static)
+endif()
 
 
 
