@@ -8,11 +8,8 @@
 #include <string>
 #include <cmath>
 #include <reaction/reaction.h>
-#include <sqlpp23/sqlite3/sqlite3.h>
-#include <sqlpp23/sqlpp23.h>
-#include "table_foo.h"
-#include <iostream>
 #include <filesystem>
+#include "database_manager.h"
 #include "nats_client.h"
 
 namespace ed = ax::NodeEditor;
@@ -20,9 +17,8 @@ namespace ed = ax::NodeEditor;
 static std::vector<std::string> g_FontNames = {"Default Font"};
 static int g_GlobalFontIdx = 0;
 
-// Global sqlpp23 Database State
-static std::unique_ptr<sqlpp::sqlite3::connection> g_db;
-static std::string g_db_last_error;
+// Database Manager
+DatabaseManager g_dbManager;
 static std::vector<std::string> g_db_results;
 
 // NATS State
@@ -31,23 +27,6 @@ static char g_natsUrl[256] = "wss://demo.nats.io:8443";
 static char g_natsSubject[256] = "imgui.demo";
 static char g_natsMessage[256] = "Hello from ImGui!";
 static std::vector<std::string> g_natsLog;
-
-void InitDb() {
-    try {
-        sqlpp::sqlite3::connection_config config;
-        config.path_to_database = ":memory:";
-        config.flags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE;
-        g_db = std::make_unique<sqlpp::sqlite3::connection>(config);
-
-        // Create table
-        (*g_db)("CREATE TABLE foo (id BIGINT, name TEXT, has_fun BOOLEAN)");
-        
-        // Seed with some initial data
-        (*g_db)(insert_into(test_db::foo).set(test_db::foo.Id = 1, test_db::foo.Name = "Initial User", test_db::foo.HasFun = true));
-    } catch (const std::exception& e) {
-        g_db_last_error = e.what();
-    }
-}
 
 void Gui() {
     auto& io = ImGui::GetIO();
@@ -129,32 +108,21 @@ void Gui() {
 
         // sqlpp23 Demo
         if (ImGui::CollapsingHeader("Type-safe SQL (sqlpp23) Example")) {
-            if (g_db) {
+            if (g_dbManager.IsInitialized()) {
                 if (ImGui::Button("Insert Random Row")) {
                     static int next_id = 100; // Start higher to avoid collision with seed
-                    try {
-                        auto name = "User " + std::to_string(next_id);
-                        (*g_db)(insert_into(test_db::foo).set(test_db::foo.Id = next_id++, test_db::foo.Name = name, test_db::foo.HasFun = true));
-                    } catch (const std::exception& e) {
-                        g_db_last_error = e.what();
-                    }
+                    auto name = "User " + std::to_string(next_id);
+                    g_dbManager.InsertRow(next_id++, name, true);
                 }
 
                 ImGui::SameLine();
                 if (ImGui::Button("Select All Rows")) {
-                    g_db_results.clear();
-                    try {
-                        for (const auto& row : (*g_db)(select(test_db::foo.Id, test_db::foo.Name).from(test_db::foo))) {
-                            g_db_results.push_back("ID: " + std::to_string(row.Id) + ", Name: " + std::string(row.Name));
-                        }
-                    } catch (const std::exception& e) {
-                        g_db_last_error = e.what();
-                    }
+                    g_db_results = g_dbManager.SelectAllRows();
                 }
 
-                if (!g_db_last_error.empty()) {
-                    ImGui::TextColored(ImVec4(1, 0, 0, 1), "Error: %s", g_db_last_error.c_str());
-                    if (ImGui::Button("Clear Error")) g_db_last_error.clear();
+                if (g_dbManager.HasError()) {
+                    ImGui::TextColored(ImVec4(1, 0, 0, 1), "Error: %s", g_dbManager.GetLastError().c_str());
+                    if (ImGui::Button("Clear Error")) g_dbManager.ClearError();
                 }
 
                 ImGui::Separator();
@@ -163,8 +131,8 @@ void Gui() {
                     ImGui::Text("- %s", res.c_str());
                 }
             } else {
-                ImGui::TextColored(ImVec4(1, 0, 0, 1), "Database not initialized: %s", g_db_last_error.c_str());
-                if (ImGui::Button("Retry Init")) InitDb();
+                ImGui::TextColored(ImVec4(1, 0, 0, 1), "Database not initialized: %s", g_dbManager.GetLastError().c_str());
+                if (ImGui::Button("Retry Init")) g_dbManager.Initialize();
             }
         }
 
@@ -298,7 +266,7 @@ void Gui() {
 
 
 int main(int, char**) {
-    InitDb();
+    g_dbManager.Initialize();
 
     // ImmApp handles the setup of HelloImGui, ImGui, Implot, etc.
     HelloImGui::RunnerParams runnerParams;
