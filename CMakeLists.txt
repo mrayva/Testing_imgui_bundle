@@ -1,10 +1,13 @@
 cmake_minimum_required(VERSION 3.22)
-project(KitchenSinkImgui VERSION 0.1.0 LANGUAGES CXX)
 
 # Workaround for WASM: ensure CMake recognizes the 32-bit architecture to prevent find_package rejections
-if (EMSCRIPTEN)
+# Must be set BEFORE project() call
+if (DEFINED ENV{EMSDK} OR EMSCRIPTEN OR CMAKE_TOOLCHAIN_FILE MATCHES "Emscripten")
     set(CMAKE_SIZEOF_VOID_P 4 CACHE INTERNAL "Check size of void*" FORCE)
+    message(STATUS "WASM build detected - forcing 32-bit architecture")
 endif()
+
+project(KitchenSinkImgui VERSION 0.1.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)

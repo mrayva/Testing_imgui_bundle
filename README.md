@@ -53,24 +53,28 @@ cmake -G Ninja .. && ninja
 
 ### Web/WASM (Emscripten)
 
-**⚠️ Key Discovery**: Use **gcc-14** with emcmake to get full sqlpp23 support!
+**✅ Produces actual WebAssembly** (.wasm + .js + .html files)
 
 ```bash
 # Activate Emscripten
 source ~/emsdk/emsdk_env.sh
 
-# Configure with gcc-14 (NOT emcc!)
+# Configure with proper toolchain
 rm -rf build_wasm && mkdir build_wasm && cd build_wasm
-emcmake cmake -G Ninja \
-  -DCMAKE_CXX_COMPILER=g++-14 \
-  -DCMAKE_C_COMPILER=gcc-14 \
-  ..
+cmake -G Ninja .. \
+  -DCMAKE_TOOLCHAIN_FILE=~/vcpkg/scripts/buildsystems/vcpkg.cmake \
+  -DVCPKG_TARGET_TRIPLET=wasm32-emscripten \
+  -DVCPKG_CHAINLOAD_TOOLCHAIN_FILE=$EMSDK/upstream/emscripten/cmake/Modules/Platform/Emscripten.cmake
+
+# Build
 ninja
+
+# Run (must use HTTP server)
+python3 -m http.server 8000
+# Open: http://localhost:8000/KitchenSinkImgui.html
 ```
 
-This produces a native x86-64 binary that works with the WASM build system while avoiding Emscripten's C++23 limitations.
-
-**Result**: Full sqlpp23 type-safe SQL works in both native and WASM builds!
+**Important:** The WASM build uses Emscripten's clang, which has limited C++23 support. sqlpp23 type-safe DSL may have limitations - use raw SQL as workaround if needed.
 
 See [`BUILD_STATUS.md`](BUILD_STATUS.md) for detailed build results and [`database/`](database/) for the new database architecture.
 
