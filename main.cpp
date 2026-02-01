@@ -9,7 +9,8 @@
 #include <cmath>
 #include <reaction/reaction.h>
 #include <filesystem>
-#include "database_manager.h"
+#include "database/database_manager.h"
+#include "database/repositories/foo_repository.h"
 #include "nats_client.h"
 
 namespace ed = ax::NodeEditor;
@@ -17,8 +18,8 @@ namespace ed = ax::NodeEditor;
 static std::vector<std::string> g_FontNames = {"Default Font"};
 static int g_GlobalFontIdx = 0;
 
-// Database Manager
-DatabaseManager g_dbManager;
+// Database Manager and Demo Repository
+static FooRepository* g_fooRepo = nullptr;  // Initialized after database
 static std::vector<std::string> g_db_results;
 
 // NATS State
@@ -108,21 +109,21 @@ void Gui() {
 
         // sqlpp23 Demo
         if (ImGui::CollapsingHeader("Type-safe SQL (sqlpp23) Example")) {
-            if (g_dbManager.IsInitialized()) {
+            if (DatabaseManager::Get().IsInitialized() && g_fooRepo) {
                 if (ImGui::Button("Insert Random Row")) {
                     static int next_id = 100; // Start higher to avoid collision with seed
                     auto name = "User " + std::to_string(next_id);
-                    g_dbManager.InsertRow(next_id++, name, true);
+                    g_fooRepo->Insert(next_id++, name, true);
                 }
 
                 ImGui::SameLine();
                 if (ImGui::Button("Select All Rows")) {
-                    g_db_results = g_dbManager.SelectAllRows();
+                    g_db_results = g_fooRepo->SelectAllAsStrings();
                 }
 
-                if (g_dbManager.HasError()) {
-                    ImGui::TextColored(ImVec4(1, 0, 0, 1), "Error: %s", g_dbManager.GetLastError().c_str());
-                    if (ImGui::Button("Clear Error")) g_dbManager.ClearError();
+                if (g_fooRepo->HasError()) {
+                    ImGui::TextColored(ImVec4(1, 0, 0, 1), "Error: %s", g_fooRepo->GetLastError().c_str());
+                    if (ImGui::Button("Clear Error")) g_fooRepo->ClearError();
                 }
 
                 ImGui::Separator();
@@ -131,8 +132,15 @@ void Gui() {
                     ImGui::Text("- %s", res.c_str());
                 }
             } else {
-                ImGui::TextColored(ImVec4(1, 0, 0, 1), "Database not initialized: %s", g_dbManager.GetLastError().c_str());
-                if (ImGui::Button("Retry Init")) g_dbManager.Initialize();
+                ImGui::TextColored(ImVec4(1, 0, 0, 1), "Database not initialized");
+                if (ImGui::Button("Retry Init")) {
+                    DatabaseManager& db = DatabaseManager::Get();
+                    if (db.Initialize()) {
+                        if (!g_fooRepo) g_fooRepo = new FooRepository(db);
+                        g_fooRepo->CreateTable();
+                        g_fooRepo->SeedDemoData();
+                    }
+                }
             }
         }
 
@@ -266,7 +274,14 @@ void Gui() {
 
 
 int main(int, char**) {
-    g_dbManager.Initialize();
+    // Initialize database (default: memory mode)
+    DatabaseManager& g_dbManager = DatabaseManager::Get();
+    g_dbManager.Initialize(DatabaseConfig::Memory());
+    
+    // Create demo repository and setup table
+    g_fooRepo = new FooRepository(g_dbManager);
+    g_fooRepo->CreateTable();
+    g_fooRepo->SeedDemoData();
 
     // ImmApp handles the setup of HelloImGui, ImGui, Implot, etc.
     HelloImGui::RunnerParams runnerParams;
