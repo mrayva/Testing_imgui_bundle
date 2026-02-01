@@ -290,3 +290,269 @@ void TestAllModes() {
     }
 }
 ```
+
+---
+
+## SQLite Online Backup API Examples
+
+The fastest way to load databases in WASM (10-100x faster than INSERT INTO ... SELECT).
+
+### Load OPFS Database into Memory (Blocking)
+
+```cpp
+#include "database/database_manager.h"
+#include "database/repositories/user_repository.h"
+
+int main() {
+    // 1. Create fast in-memory database
+    DatabaseManager& db = DatabaseManager::Get();
+    db.Initialize(DatabaseConfig::Memory());
+    
+    // 2. Load entire OPFS database into memory
+    //    This is 10-100x faster than INSERT INTO ... SELECT
+    if (!db.BackupFromFile("/opfs/userdata.db")) {
+        std::cerr << "No saved data, starting fresh" << std::endl;
+    }
+    
+    // 3. Database is now in memory - blazing fast!
+    auto userRepo = new UserRepository(db);
+    userRepo->CreateTable();  // Safe even if already loaded
+    
+    // Work with data at RAM speed...
+    auto users = userRepo->SelectAll();
+    
+    return 0;
+}
+```
+
+**Why?** OPFS has synchronous I/O overhead. Loading into memory gives you OPFS persistence with RAM-speed queries!
+
+### Load Large Database with Progress (Non-Blocking)
+
+```cpp
+#include "database/database_manager.h"
+#include <iostream>
+
+void LoadDatabaseWithProgress() {
+    DatabaseManager& db = DatabaseManager::Get();
+    
+    // Memory database with OPFS tuning
+    auto config = DatabaseConfig::Memory();
+    config.tuning = PerformanceTuning::ForOPFS();
+    db.Initialize(config);
+    
+    std::cout << "Loading database..." << std::endl;
+    
+    // Load 100 pages at a time (non-blocking)
+    bool success = db.BackupFromFileIncremental(
+        "/opfs/large.db",
+        100,  // pages per step
+        [](int remaining, int total) {
+            int percent = 100 * (total - remaining) / total;
+            std::cout << "\rProgress: " << percent << "%     " << std::flush;
+        }
+    );
+    
+    if (success) {
+        std::cout << "\nDatabase loaded successfully!" << std::endl;
+    } else {
+        std::cerr << "\nLoad failed: " << db.GetLastError() << std::endl;
+    }
+}
+```
+
+**Use when:** Database is >10MB and UI responsiveness matters.
+
+### WASM: Load on Startup, Save on Shutdown
+
+```cpp
+#ifdef __EMSCRIPTEN__
+#include <emscripten.h>
+#endif
+
+void InitializeApp() {
+    DatabaseManager& db = DatabaseManager::Get();
+    
+    // 1. Create memory database
+    db.Initialize(DatabaseConfig::Memory());
+    
+    // 2. Try to load persisted data
+    if (db.BackupFromFile("/opfs/app.db")) {
+        std::cout << "Restored previous session" << std::endl;
+    } else {
+        std::cout << "First run, creating default data" << std::endl;
+        // Seed default data...
+    }
+}
+
+void ShutdownApp() {
+    // Save all changes to OPFS
+    if (!DatabaseManager::Get().BackupToFile("/opfs/app.db")) {
+        std::cerr << "Failed to save!" << std::endl;
+    }
+}
+
+#ifdef __EMSCRIPTEN__
+// Register shutdown handler
+EM_JS(void, RegisterShutdownHandler, (), {
+    window.addEventListener('beforeunload', function() {
+        Module._ShutdownApp();  // Calls C++ function
+    });
+});
+#endif
+
+int main() {
+    InitializeApp();
+    
+    #ifdef __EMSCRIPTEN__
+    RegisterShutdownHandler();
+    #endif
+    
+    // Run app...
+    
+    #ifndef __EMSCRIPTEN__
+    ShutdownApp();  // Desktop: explicit shutdown
+    #endif
+}
+```
+
+**Best pattern for WASM**: Memory speed + OPFS persistence!
+
+### Periodic Auto-Save
+
+```cpp
+#include <chrono>
+
+class AutoSaveManager {
+    std::chrono::steady_clock::time_point m_lastSave;
+    bool m_dirty = false;
+    
+public:
+    AutoSaveManager() : m_lastSave(std::chrono::steady_clock::now()) {}
+    
+    void MarkDirty() {
+        m_dirty = true;
+    }
+    
+    void Update() {
+        if (!m_dirty) return;
+        
+        auto now = std::chrono::steady_clock::now();
+        auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(now - m_lastSave);
+        
+        // Auto-save every 5 minutes
+        if (elapsed.count() >= 300) {
+            if (DatabaseManager::Get().BackupToFile("/opfs/app.db")) {
+                std::cout << "Auto-saved" << std::endl;
+                m_dirty = false;
+                m_lastSave = now;
+            }
+        }
+    }
+};
+
+// Global instance
+AutoSaveManager g_autoSave;
+
+// In repositories, mark dirty on changes
+void UserRepository::Insert(int id, const std::string& name) {
+    // ... normal insert ...
+    g_autoSave.MarkDirty();
+}
+
+// In main loop
+void Gui() {
+    // ... UI code ...
+    
+    // Check if auto-save needed
+    g_autoSave.Update();
+}
+```
+
+### Performance Comparison Example
+
+```cpp
+#include <chrono>
+#include <iostream>
+
+void ComparePerformance() {
+    using namespace std::chrono;
+    
+    // Method 1: INSERT INTO ... SELECT (slow)
+    {
+        DatabaseManager db1, db2;
+        db1.Initialize(DatabaseConfig::NativeFile("source.db"));
+        db2.Initialize(DatabaseConfig::Memory());
+        
+        auto start = steady_clock::now();
+        
+        // Slow way
+        db2.GetConnection()("ATTACH DATABASE 'source.db' AS src");
+        db2.GetConnection()("INSERT INTO main.users SELECT * FROM src.users");
+        db2.GetConnection()("DETACH DATABASE src");
+        
+        auto elapsed = duration_cast<milliseconds>(steady_clock::now() - start);
+        std::cout << "INSERT INTO ... SELECT: " << elapsed.count() << "ms" << std::endl;
+    }
+    
+    // Method 2: Backup API (fast)
+    {
+        DatabaseManager& db = DatabaseManager::Get();
+        db.Initialize(DatabaseConfig::Memory());
+        
+        auto start = steady_clock::now();
+        
+        // Fast way
+        db.BackupFromFile("source.db");
+        
+        auto elapsed = duration_cast<milliseconds>(steady_clock::now() - start);
+        std::cout << "Backup API: " << elapsed.count() << "ms" << std::endl;
+    }
+    
+    // Typical result: Backup API is 10-100x faster!
+}
+```
+
+### Error Handling with Backup
+
+```cpp
+bool InitializeDatabaseSafely() {
+    DatabaseManager& db = DatabaseManager::Get();
+    
+    // 1. Create memory database
+    if (!db.Initialize(DatabaseConfig::Memory())) {
+        std::cerr << "Failed to initialize database" << std::endl;
+        return false;
+    }
+    
+    // 2. Try to load from OPFS
+    if (!db.BackupFromFile("/opfs/app.db")) {
+        // Not an error - might be first run
+        std::cout << "Starting with empty database: " << db.GetLastError() << std::endl;
+        
+        // Create schema
+        auto repo = new UserRepository(db);
+        repo->CreateTable();
+        repo->SeedDefaultData();
+        
+        // Save initial state
+        if (!db.BackupToFile("/opfs/app.db")) {
+            std::cerr << "Warning: Could not save initial database" << std::endl;
+        }
+    }
+    
+    return true;
+}
+```
+
+---
+
+## See Also
+
+- **[BACKUP_API.md](BACKUP_API.md)** - Complete backup API guide (550+ lines)
+- **[PERFORMANCE.md](PERFORMANCE.md)** - OPFS optimization guide
+- **[QUICK_START.md](QUICK_START.md)** - Getting started
+
+---
+
+**Pro Tip**: For WASM apps >1MB, the Backup API is **essential** for good performance. Read [BACKUP_API.md](BACKUP_API.md)!
