@@ -9,8 +9,11 @@
 #include <cmath>
 #include <reaction/reaction.h>
 #include <filesystem>
+#include <thread>
+#include <atomic>
 #include "database/database_manager.h"
 #include "database/repositories/foo_repository.h"
+#include "database/async_table_widget.h"
 #include "nats_client.h"
 
 namespace ed = ax::NodeEditor;
@@ -21,6 +24,11 @@ static int g_GlobalFontIdx = 0;
 // Database Manager and Demo Repository
 static FooRepository* g_fooRepo = nullptr;  // Initialized after database
 static std::vector<std::string> g_db_results;
+
+// Async Table Widget (Zero-Lock Rendering)
+static db::AsyncTableWidget* g_asyncTable = nullptr;
+static std::thread g_refreshThread;
+static std::atomic<bool> g_refreshRunning{false};
 
 // NATS State
 static NatsClient g_natsClient;
@@ -107,6 +115,36 @@ void Gui() {
             }
         }
 
+        // Async Table Demo (Zero-Lock)
+        if (ImGui::CollapsingHeader("Async Table Widget (Zero-Lock Rendering)")) {
+            if (g_asyncTable) {
+                ImGui::TextColored(ImVec4(0, 1, 0, 1), 
+                    "This table uses double-buffering for zero-lock rendering!");
+                ImGui::Text("Background thread updates every 3 seconds.");
+                ImGui::Text("UI never blocks, even during refresh.");
+                
+                ImGui::Separator();
+                
+                // Manual refresh button
+                if (ImGui::Button("Manual Refresh")) {
+                    std::thread([]{
+                        if (g_asyncTable) g_asyncTable->Refresh();
+                    }).detach();
+                }
+                
+                ImGui::SameLine();
+                ImGui::Text("Rows: %zu", g_asyncTable->GetRowCount());
+                
+                // Render the table (zero locks!)
+                g_asyncTable->Render();
+                
+            } else {
+                ImGui::TextColored(ImVec4(1, 0, 0, 1), "Async table not initialized");
+            }
+        }
+        
+        ImGui::Separator();
+        
         // sqlpp23 Demo
         if (ImGui::CollapsingHeader("Type-safe SQL (sqlpp23) Example")) {
             if (DatabaseManager::Get().IsInitialized() && g_fooRepo) {
@@ -282,6 +320,42 @@ int main(int, char**) {
     g_fooRepo = new FooRepository(g_dbManager);
     g_fooRepo->CreateTable();
     g_fooRepo->SeedDemoData();
+    
+    // Setup Async Table Widget
+    g_asyncTable = new db::AsyncTableWidget();
+    g_asyncTable->AddColumn("ID", 80.0f);
+    g_asyncTable->AddColumn("Name", 200.0f);
+    g_asyncTable->AddColumn("Has Fun", 100.0f);
+    g_asyncTable->EnableFilter(true);
+    
+    // Set refresh callback
+    g_asyncTable->SetRefreshCallback([](auto& rows) {
+        DatabaseManager& db = DatabaseManager::Get();
+        FooRepository repo(db);
+        auto results = repo.SelectAll();
+        
+        for (const auto& r : results) {
+            db::AsyncTableWidget::Row row(3);
+            row.columns[0] = std::to_string(r.id);
+            row.columns[1] = r.name;
+            row.columns[2] = r.has_fun ? "Yes" : "No";
+            rows.push_back(row);
+        }
+    });
+    
+    // Initial load
+    g_asyncTable->Refresh();
+    
+    // Start background refresh thread (every 3 seconds)
+    g_refreshRunning = true;
+    g_refreshThread = std::thread([]() {
+        while (g_refreshRunning) {
+            std::this_thread::sleep_for(std::chrono::seconds(3));
+            if (g_asyncTable) {
+                g_asyncTable->Refresh();
+            }
+        }
+    });
 
     // ImmApp handles the setup of HelloImGui, ImGui, Implot, etc.
     HelloImGui::RunnerParams runnerParams;
