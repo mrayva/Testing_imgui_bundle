@@ -1,9 +1,11 @@
-# Type Erasure in AsyncTableWidget - Complete Example
+# Type Erasure in AsyncTableWidget - MANDATORY Pattern
 
 ## What Is Type Erasure?
 
 Type erasure allows storing typed sqlpp23 result rows in a generic container (`std::any`)
-while maintaining type safety for operations like sorting, without needing intermediate structs like `FooRow`.
+while maintaining type safety for operations like sorting.
+
+**MANDATORY**: All AsyncTableWidget rows MUST use this pattern. No backward compatibility with string-only approach.
 
 ## The Problem (Before)
 

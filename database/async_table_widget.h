@@ -15,25 +15,42 @@ namespace db {
 /**
  * @brief Async table widget for ImGui with zero-lock rendering
  * 
- * Uses double-buffering to display database query results that can be
- * updated in background threads without blocking the UI.
+ * Uses TYPE ERASURE pattern with double-buffering to display database
+ * query results that can be updated in background threads without blocking the UI.
+ * 
+ * MANDATORY: All rows MUST have typed data in userData for sorting to work.
  * 
  * Features:
  * - Zero locks on render path (atomic swap only)
+ * - Type-safe sorting via typedExtractor (no FooRow structs needed!)
  * - ImGuiListClipper for efficient large lists
- * - Customizable column formatters
+ * - Customizable column formatters and renderers
  * - Background refresh support
  * 
- * Example:
+ * Example (sqlpp23 integration):
+ *   struct FooData { int64_t id; std::string name; bool active; };
+ *   
  *   AsyncTableWidget widget;
- *   widget.AddColumn("ID");
+ *   widget.AddColumn("ID", 0.3f, ImGuiTableColumnFlags_DefaultSort);
  *   widget.AddColumn("Name");
+ *   widget.AddColumn("Active");
+ *   
  *   widget.SetRefreshCallback([&](auto& rows) {
- *       FooRepository repo(db);
- *       auto results = repo.SelectAll();
- *       for (auto& r : results) {
- *           rows.push_back({std::to_string(r.id), r.name, r.has_fun ? "Yes" : "No"});
+ *       auto results = db(select(all_of(foo)).from(foo));
+ *       for (const auto& sqlppRow : results) {
+ *           int64_t id = sqlppRow.Id;
+ *           FooData data{id, sqlppRow.Name, sqlppRow.HasFun};
+ *           rows.push_back({
+ *               .columns = {std::to_string(id), data.name, data.active ? "Yes" : "No"},
+ *               .userData = data  // Store typed data!
+ *           });
  *       }
+ *   });
+ *   
+ *   // Type-safe sorting on ID column
+ *   widget.SetColumnTypedExtractor(0, [](const Row& row) {
+ *       auto& data = std::any_cast<const FooData&>(row.userData);
+ *       return std::any(data.id);  // Sorts as int64, not string!
  *   });
  *   
  *   // GUI thread:
@@ -81,13 +98,12 @@ public:
     
     /**
      * @brief Typed value extractor - extracts typed value from Row.userData
-     * Use this to access sqlpp23 row fields directly for type-safe operations
+     * REQUIRED for sortable columns to enable type-safe sorting.
      * 
      * Example:
      *   [](const Row& row) -> std::any {
-     *       if (!row.userData.has_value()) return {};
-     *       auto& sqlppRow = std::any_cast<const SqlppRowType&>(row.userData);
-     *       return std::any(static_cast<int64_t>(sqlppRow.Id));
+     *       auto& data = std::any_cast<const MyData&>(row.userData);
+     *       return std::any(data.id);  // Extract int64_t field
      *   }
      */
     using TypedExtractor = std::function<std::any(const Row&)>;
@@ -107,8 +123,8 @@ public:
         // If returns true, default text rendering is skipped
         CellRenderer cellRenderer;
         
-        // NEW: Typed value extractor for type-safe sorting
-        // If provided, sorting uses typed values instead of strings
+        // REQUIRED for sortable columns: Typed value extractor
+        // Extracts typed values from Row.userData for accurate sorting
         TypedExtractor typedExtractor;
         
         // Optional: Icon texture for this column's cells
@@ -364,17 +380,20 @@ public:
         // Execute refresh callback (this is where the DB query happens)
         m_refreshCallback(backBuffer);
         
-        // Apply sorting if requested (sort on TYPED data when available!)
+        // Apply sorting if requested (TYPED SORTING ONLY!)
         if (m_lastSortColumn >= 0 && m_lastSortColumn < (int)m_columns.size()) {
             bool ascending = (m_lastSortDirection == ImGuiSortDirection_Ascending);
             const auto& colCfg = m_columns[m_lastSortColumn];
             
-            std::sort(backBuffer.begin(), backBuffer.end(),
-                [&colCfg, ascending, this](const Row& a, const Row& b) {
-                    int col = m_lastSortColumn;
-                    
-                    // If typed extractor available, use it for type-safe sorting!
-                    if (colCfg.typedExtractor) {
+            // Typed extractor is REQUIRED for sorting
+            if (!colCfg.typedExtractor) {
+                // Column marked sortable but no typed extractor - log error
+                std::cerr << "ERROR: Column '" << colCfg.header 
+                          << "' is sortable but has no typedExtractor. Skipping sort.\n";
+            } else {
+                std::sort(backBuffer.begin(), backBuffer.end(),
+                    [&colCfg, ascending](const Row& a, const Row& b) {
+                        // Extract typed values from userData
                         std::any aVal = colCfg.typedExtractor(a);
                         std::any bVal = colCfg.typedExtractor(b);
                         
@@ -382,7 +401,7 @@ public:
                             return false;  // Can't compare empty values
                         }
                         
-                        // Try common types for typed comparison
+                        // Type-safe comparison (try common types)
                         if (auto* av = std::any_cast<int64_t>(&aVal)) {
                             auto bv = std::any_cast<int64_t>(bVal);
                             return ascending ? (*av < bv) : (*av > bv);
@@ -402,32 +421,12 @@ public:
                             auto bv = std::any_cast<std::string_view>(bVal);
                             return ascending ? (*av < bv) : (*av > bv);
                         }
-                    }
-                    
-                    // Fallback: Sort on string columns (old behavior)
-                    if (col >= (int)a.columns.size() || col >= (int)b.columns.size()) {
+                        
+                        // Unknown type - can't sort
+                        std::cerr << "WARNING: Unknown type in typedExtractor, cannot sort.\n";
                         return false;
-                    }
-                    
-                    const std::string& aVal = a.columns[col];
-                    const std::string& bVal = b.columns[col];
-                    
-                    // Try numeric comparison first
-                    char* endA = nullptr;
-                    char* endB = nullptr;
-                    double numA = std::strtod(aVal.c_str(), &endA);
-                    double numB = std::strtod(bVal.c_str(), &endB);
-                    
-                    // If both converted successfully, compare as numbers
-                    if (endA != aVal.c_str() && *endA == '\0' && 
-                        endB != bVal.c_str() && *endB == '\0') {
-                        return ascending ? (numA < numB) : (numA > numB);
-                    }
-                    
-                    // Otherwise compare as strings
-                    int cmp = aVal.compare(bVal);
-                    return ascending ? (cmp < 0) : (cmp > 0);
-                });
+                    });
+            }
         }
         
         // Atomic swap (release semantics - ensures all writes are visible)
