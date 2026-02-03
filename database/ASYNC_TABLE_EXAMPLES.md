@@ -370,3 +370,275 @@ int main(int, char**) {
 - [database/async_table_widget.h](async_table_widget.h) - Widget implementation
 - [database/repositories/foo_repository.h](repositories/foo_repository.h) - Example repository
 - [database/EXAMPLES.md](EXAMPLES.md) - More database examples
+
+---
+
+## UPDATED FEATURES (2026-02-03): Sorting, Icons, Advanced Column Features
+
+The AsyncTableWidget now supports advanced ImGui table features natively!
+
+### Example 7: Column Sorting (Auto-Enabled)
+
+Sorting is now enabled by default! Just click column headers to sort.
+
+```cpp
+db::AsyncTableWidget table;
+
+// Sorting is automatic - just add columns
+table.AddColumn("ID", 80.0f);           // Clickable header, sorts numerically
+table.AddColumn("Name", 200.0f);        // Clickable header, sorts alphabetically
+table.AddColumn("Score", 100.0f);       // Clickable header, auto-detects numbers
+
+// Optionally disable sorting for specific columns
+table.AddColumn("Actions", 120.0f, ImGuiTableColumnFlags_NoSort);
+
+// The widget automatically:
+// - Detects numeric vs string data
+// - Sorts ascending/descending on header click
+// - Shows sort arrow icons in headers
+// - Applies sort during Refresh() (zero locks!)
+```
+
+**How it works:**
+- Sorting happens in the **back buffer** during `Refresh()`, not during `Render()`
+- GUI thread **never blocks** - maintains zero-lock guarantee
+- Automatically detects numeric columns (uses `strtod` to test)
+- Falls back to string comparison for text columns
+
+### Example 8: Disable/Enable Sorting
+
+```cpp
+db::AsyncTableWidget table;
+table.AddColumn("ID", 80.0f);
+table.AddColumn("Name", 200.0f);
+
+// Disable sorting entirely
+table.EnableSorting(false);
+
+// Or just for specific columns via flags
+table.AddColumn("Timestamp", 150.0f, 
+    ImGuiTableColumnFlags_NoSort | ImGuiTableColumnFlags_WidthFixed);
+```
+
+### Example 9: Enum Formatters (Custom Value Mapping)
+
+Map raw values to human-readable text (like FiveM's HT_ENUM):
+
+```cpp
+db::AsyncTableWidget table;
+table.AddColumn("Status", 100.0f);
+table.AddColumn("Priority", 100.0f);
+
+// Map status codes to text
+table.SetColumnEnumFormatter(0, [](const std::string& val) -> std::string {
+    if (val == "0") return "Inactive";
+    if (val == "1") return "Active";
+    if (val == "2") return "Pending";
+    return "Unknown";
+});
+
+// Map priority numbers
+table.SetColumnEnumFormatter(1, [](const std::string& val) -> std::string {
+    int priority = std::stoi(val);
+    switch (priority) {
+        case 0: return "🔵 Low";
+        case 1: return "🟡 Medium";
+        case 2: return "🔴 High";
+        default: return "❓ Unknown";
+    }
+});
+```
+
+### Example 10: Icons in Cells
+
+Add icons to columns (requires loaded textures):
+
+```cpp
+// Load icon texture (example - use your texture loading method)
+ImTextureID typeIcon = LoadTexture("icons/file-type.png");
+
+db::AsyncTableWidget table;
+table.AddColumn("Type", 150.0f);
+table.AddColumn("Name", 200.0f);
+
+// Set icon for "Type" column
+table.SetColumnIcon(0, typeIcon, ImVec2(16, 16));
+
+// Now first column will show: [ICON] text
+```
+
+**Icon + Text Layout:**
+```
+┌─────────────────┬──────────────┐
+│ Type            │ Name         │
+├─────────────────┼──────────────┤
+│ 📄 Document     │ report.docx  │
+│ 📊 Spreadsheet  │ data.xlsx    │
+│ 📷 Image        │ photo.jpg    │
+└─────────────────┴──────────────┘
+```
+
+### Example 11: Custom Cell Renderers
+
+Full control over cell rendering (colors, buttons, progress bars):
+
+```cpp
+db::AsyncTableWidget table;
+table.AddColumn("Status", 100.0f);
+table.AddColumn("Progress", 150.0f);
+table.AddColumn("Actions", 120.0f);
+
+// Custom renderer for status (colored indicators)
+table.SetColumnCellRenderer(0, [](const Row& row, int col) -> bool {
+    std::string status = row.columns[col];
+    
+    if (status == "ERROR") {
+        ImGui::TextColored(ImVec4(1.0f, 0.2f, 0.2f, 1.0f), "● ERROR");
+    } else if (status == "WARNING") {
+        ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.2f, 1.0f), "● WARNING");
+    } else {
+        ImGui::TextColored(ImVec4(0.2f, 1.0f, 0.2f, 1.0f), "● OK");
+    }
+    return true; // We handled rendering
+});
+
+// Progress bar in cell
+table.SetColumnCellRenderer(1, [](const Row& row, int col) -> bool {
+    float progress = std::stof(row.columns[col]) / 100.0f;
+    ImGui::ProgressBar(progress, ImVec2(-1, 0));
+    return true;
+});
+
+// Button in cell
+table.SetColumnCellRenderer(2, [](const Row& row, int col) -> bool {
+    if (ImGui::SmallButton("View")) {
+        // Handle click
+    }
+    ImGui::SameLine();
+    if (ImGui::SmallButton("Delete")) {
+        // Handle delete
+    }
+    return true;
+});
+```
+
+### Example 12: Resizable & Reorderable Columns
+
+Enable user customization:
+
+```cpp
+db::AsyncTableWidget table;
+
+// Already enabled by default, but you can control it:
+table.EnableResizing(true);    // Users can drag column borders
+table.EnableReordering(true);  // Users can drag column headers to reorder
+
+// Or disable for specific use cases
+table.EnableReordering(false);
+
+// Or use granular flags
+table.SetTableFlags(
+    ImGuiTableFlags_Sortable |
+    ImGuiTableFlags_Resizable |
+    ImGuiTableFlags_Reorderable |
+    ImGuiTableFlags_Hideable |  // Right-click to hide columns
+    ImGuiTableFlags_Borders |
+    ImGuiTableFlags_RowBg |
+    ImGuiTableFlags_ScrollY
+);
+```
+
+### Example 13: Programmatic Sorting
+
+Set sort state from code:
+
+```cpp
+db::AsyncTableWidget table;
+table.AddColumn("ID", 80.0f);
+table.AddColumn("Name", 200.0f);
+table.AddColumn("Date", 150.0f);
+
+// Sort by Date column (index 2) descending by default
+table.SetSort(2, ImGuiSortDirection_Descending);
+
+// Will apply on next Refresh()
+table.Refresh();
+
+// Check current sort
+int sortCol = table.GetSortColumn();
+auto sortDir = table.GetSortDirection();
+```
+
+### Example 14: Complete Feature Showcase
+
+Combining all features:
+
+```cpp
+// Setup widget with all bells and whistles
+db::AsyncTableWidget table;
+
+// Add columns with different features
+table.AddColumn("Type", 60.0f, 
+    ImGuiTableColumnFlags_WidthFixed | ImGuiTableColumnFlags_DefaultSort);
+table.AddColumn("ID", 80.0f, ImGuiTableColumnFlags_PreferSortAscending);
+table.AddColumn("Name", 200.0f);
+table.AddColumn("Status", 100.0f, ImGuiTableColumnFlags_NoSort);
+table.AddColumn("Progress", 150.0f);
+table.AddColumn("Actions", 120.0f, ImGuiTableColumnFlags_NoSort);
+
+// Set icon for Type column
+ImTextureID fileIcon = LoadTexture("file.png");
+table.SetColumnIcon(0, fileIcon, ImVec2(16, 16));
+
+// Enum formatter for Status
+table.SetColumnEnumFormatter(3, [](const std::string& val) {
+    return (val == "1") ? "✓ Done" : "⏳ Pending";
+});
+
+// Progress bar renderer
+table.SetColumnCellRenderer(4, [](const Row& row, int col) {
+    float progress = std::stof(row.columns[col]) / 100.0f;
+    ImGui::ProgressBar(progress, ImVec2(-1, 0));
+    return true;
+});
+
+// Action buttons
+table.SetColumnCellRenderer(5, [](const Row& row, int col) {
+    if (ImGui::SmallButton("Edit")) { /* ... */ }
+    ImGui::SameLine();
+    if (ImGui::SmallButton("Delete")) { /* ... */ }
+    return true;
+});
+
+// Enable advanced features
+table.EnableFilter(true);
+table.EnableSorting(true);
+table.EnableResizing(true);
+table.EnableReordering(true);
+
+// Set refresh callback
+table.SetRefreshCallback([](auto& rows) {
+    // Populate from database...
+});
+
+// Use in GUI loop
+void OnGui() {
+    table.Render(); // Still zero locks!
+}
+```
+
+### Summary of New Features
+
+| Feature | API | Notes |
+|---------|-----|-------|
+| **Sorting** | `EnableSorting()` | Auto-detects numeric vs string, applies during Refresh() |
+| **Icons** | `SetColumnIcon()` | Shows icon + text in cells |
+| **Enum Mapping** | `SetColumnEnumFormatter()` | Maps raw values to display text |
+| **Custom Rendering** | `SetColumnCellRenderer()` | Full control: colors, buttons, progress bars |
+| **Resizable Columns** | `EnableResizing()` | Users drag borders to resize |
+| **Reorderable Columns** | `EnableReordering()` | Users drag headers to reorder |
+| **Programmatic Sort** | `SetSort()` | Set sort from code |
+| **Column Flags** | Pass to `AddColumn()` | Fine control per column |
+
+**All features maintain the zero-lock guarantee!** Rendering is still lock-free.
+

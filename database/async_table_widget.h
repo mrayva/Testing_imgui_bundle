@@ -6,6 +6,7 @@
 #include <functional>
 #include <memory>
 #include <any>
+#include <algorithm>
 #include "imgui.h"
 #include "database_manager.h"
 
@@ -66,15 +67,32 @@ public:
     };
     
     /**
-     * @brief Column configuration
+     * @brief Cell render function type
+     * Return true if custom rendering was done, false to use default
+     */
+    using CellRenderer = std::function<bool(const Row&, int colIndex)>;
+    
+    /**
+     * @brief Column configuration with advanced features
      */
     struct ColumnConfig {
         std::string header;
         float width = 0.0f;  // 0 = auto-size
         ImGuiTableColumnFlags flags = ImGuiTableColumnFlags_None;
         
-        // Optional: Custom formatter (accesses Row.userData if needed)
+        // Optional: Custom text formatter (accesses Row.userData if needed)
         std::function<std::string(const Row&, int colIndex)> formatter;
+        
+        // Optional: Custom cell renderer (for icons, colors, buttons, etc.)
+        // If returns true, default text rendering is skipped
+        CellRenderer cellRenderer;
+        
+        // Optional: Icon texture for this column's cells
+        ImTextureID iconTexture = 0;  // nullptr is not valid for ImTextureID (it's unsigned long long)
+        ImVec2 iconSize = ImVec2(16, 16);
+        
+        // Optional: Enum converter (maps string value to display text)
+        std::function<std::string(const std::string&)> enumFormatter;
         
         ColumnConfig(const std::string& h, float w = 0.0f) 
             : header(h), width(w) {}
@@ -95,11 +113,21 @@ private:
     std::string m_tableId;
     ImGuiTableFlags m_tableFlags = ImGuiTableFlags_Borders | 
                                    ImGuiTableFlags_RowBg | 
-                                   ImGuiTableFlags_ScrollY;
+                                   ImGuiTableFlags_ScrollY |
+                                   ImGuiTableFlags_Sortable |
+                                   ImGuiTableFlags_Resizable |
+                                   ImGuiTableFlags_Reorderable;
     
     // Optional: Filter/search
     char m_filterBuffer[256] = "";
     bool m_filterEnabled = false;
+    
+    // Sorting state
+    int m_lastSortColumn = -1;
+    ImGuiSortDirection m_lastSortDirection = ImGuiSortDirection_None;
+    
+    // Comparison function for sorting (can be customized)
+    using RowComparator = std::function<bool(const Row&, const Row&, int column, bool ascending)>;
 
 public:
     AsyncTableWidget() {
@@ -113,7 +141,7 @@ public:
      * 
      * @param header Column header text
      * @param width Column width (0 = auto)
-     * @param flags ImGui column flags
+     * @param flags ImGui column flags (includes sorting, resizing options)
      * @param formatter Optional custom formatter function
      */
     void AddColumn(
@@ -185,6 +213,20 @@ public:
             }
             ImGui::TableHeadersRow();
             
+            // Check for sorting changes
+            if (ImGuiTableSortSpecs* sortSpecs = ImGui::TableGetSortSpecs()) {
+                if (sortSpecs->SpecsDirty && sortSpecs->SpecsCount > 0) {
+                    // Get first sort spec (support single-column sort for now)
+                    const ImGuiTableColumnSortSpecs& spec = sortSpecs->Specs[0];
+                    m_lastSortColumn = spec.ColumnIndex;
+                    m_lastSortDirection = spec.SortDirection;
+                    
+                    // NOTE: We'll sort the back buffer during Refresh()
+                    // to maintain zero-lock rendering. Just mark it dirty here.
+                    sortSpecs->SpecsDirty = false;
+                }
+            }
+            
             // Use ImGuiListClipper for efficient rendering of large lists
             ImGuiListClipper clipper;
             clipper.Begin(rows.size());
@@ -211,12 +253,38 @@ public:
                     for (size_t col = 0; col < m_columns.size() && col < rowData.columns.size(); col++) {
                         ImGui::TableSetColumnIndex(col);
                         
-                        // Use custom formatter if provided
-                        if (m_columns[col].formatter) {
-                            std::string formatted = m_columns[col].formatter(rowData, col);
-                            ImGui::TextUnformatted(formatted.c_str());
-                        } else {
-                            ImGui::TextUnformatted(rowData.columns[col].c_str());
+                        const auto& colCfg = m_columns[col];
+                        bool rendered = false;
+                        
+                        // Try custom cell renderer first
+                        if (colCfg.cellRenderer) {
+                            rendered = colCfg.cellRenderer(rowData, col);
+                        }
+                        
+                        // If not custom rendered, try icon + text
+                        if (!rendered && colCfg.iconTexture) {
+                            ImGui::Image(colCfg.iconTexture, colCfg.iconSize);
+                            ImGui::SameLine();
+                        }
+                        
+                        // Render text (unless custom renderer handled it)
+                        if (!rendered) {
+                            std::string text;
+                            
+                            // Use enum formatter if available
+                            if (colCfg.enumFormatter) {
+                                text = colCfg.enumFormatter(rowData.columns[col]);
+                            }
+                            // Use custom formatter if provided
+                            else if (colCfg.formatter) {
+                                text = colCfg.formatter(rowData, col);
+                            }
+                            // Default: use raw string
+                            else {
+                                text = rowData.columns[col];
+                            }
+                            
+                            ImGui::TextUnformatted(text.c_str());
                         }
                     }
                 }
@@ -234,6 +302,8 @@ public:
      * 
      * Important: Only ONE thread should call this at a time, OR
      * you need external synchronization between multiple writers.
+     * 
+     * Sorting is applied here (not in Render) to maintain zero-lock rendering.
      */
     void Refresh() {
         if (!m_refreshCallback) {
@@ -250,6 +320,38 @@ public:
         
         // Execute refresh callback (this is where the DB query happens)
         m_refreshCallback(backBuffer);
+        
+        // Apply sorting if requested
+        if (m_lastSortColumn >= 0 && m_lastSortColumn < (int)m_columns.size()) {
+            bool ascending = (m_lastSortDirection == ImGuiSortDirection_Ascending);
+            
+            std::sort(backBuffer.begin(), backBuffer.end(), 
+                [this, ascending](const Row& a, const Row& b) {
+                    int col = m_lastSortColumn;
+                    if (col >= (int)a.columns.size() || col >= (int)b.columns.size()) {
+                        return false;
+                    }
+                    
+                    const std::string& aVal = a.columns[col];
+                    const std::string& bVal = b.columns[col];
+                    
+                    // Try numeric comparison first
+                    char* endA = nullptr;
+                    char* endB = nullptr;
+                    double numA = std::strtod(aVal.c_str(), &endA);
+                    double numB = std::strtod(bVal.c_str(), &endB);
+                    
+                    // If both converted successfully, compare as numbers
+                    if (endA != aVal.c_str() && *endA == '\0' && 
+                        endB != bVal.c_str() && *endB == '\0') {
+                        return ascending ? (numA < numB) : (numA > numB);
+                    }
+                    
+                    // Otherwise compare as strings
+                    int cmp = aVal.compare(bVal);
+                    return ascending ? (cmp < 0) : (cmp > 0);
+                });
+        }
         
         // Atomic swap (release semantics - ensures all writes are visible)
         m_frontIndex.store(backIdx, std::memory_order_release);
@@ -281,6 +383,90 @@ public:
         int backIdx = 1 - currentFront;
         m_buffers[backIdx].clear();
         m_frontIndex.store(backIdx, std::memory_order_release);
+    }
+    
+    // ==================== Advanced Features Helpers ====================
+    
+    /**
+     * @brief Get current table flags
+     */
+    ImGuiTableFlags GetTableFlags() const {
+        return m_tableFlags;
+    }
+    
+    /**
+     * @brief Enable/disable specific table features
+     */
+    void EnableSorting(bool enable = true) {
+        if (enable) {
+            m_tableFlags |= ImGuiTableFlags_Sortable;
+        } else {
+            m_tableFlags &= ~ImGuiTableFlags_Sortable;
+        }
+    }
+    
+    void EnableResizing(bool enable = true) {
+        if (enable) {
+            m_tableFlags |= ImGuiTableFlags_Resizable;
+        } else {
+            m_tableFlags &= ~ImGuiTableFlags_Resizable;
+        }
+    }
+    
+    void EnableReordering(bool enable = true) {
+        if (enable) {
+            m_tableFlags |= ImGuiTableFlags_Reorderable;
+        } else {
+            m_tableFlags &= ~ImGuiTableFlags_Reorderable;
+        }
+    }
+    
+    /**
+     * @brief Set icon texture for a specific column
+     * @param colIndex Column index
+     * @param texture ImTextureID (nullptr to remove icon)
+     * @param size Icon size in pixels
+     */
+    void SetColumnIcon(size_t colIndex, ImTextureID texture, ImVec2 size = ImVec2(16, 16)) {
+        if (colIndex < m_columns.size()) {
+            m_columns[colIndex].iconTexture = texture;
+            m_columns[colIndex].iconSize = size;
+        }
+    }
+    
+    /**
+     * @brief Set enum formatter for a column (maps values to display text)
+     * Example: enum {"0" -> "Inactive", "1" -> "Active"}
+     */
+    void SetColumnEnumFormatter(size_t colIndex, 
+                                std::function<std::string(const std::string&)> formatter) {
+        if (colIndex < m_columns.size()) {
+            m_columns[colIndex].enumFormatter = formatter;
+        }
+    }
+    
+    /**
+     * @brief Set custom cell renderer for a column
+     * Return true from renderer if you handled rendering, false to use default
+     */
+    void SetColumnCellRenderer(size_t colIndex, CellRenderer renderer) {
+        if (colIndex < m_columns.size()) {
+            m_columns[colIndex].cellRenderer = renderer;
+        }
+    }
+    
+    /**
+     * @brief Get current sort state
+     */
+    int GetSortColumn() const { return m_lastSortColumn; }
+    ImGuiSortDirection GetSortDirection() const { return m_lastSortDirection; }
+    
+    /**
+     * @brief Programmatically set sort (will apply on next Refresh)
+     */
+    void SetSort(int column, ImGuiSortDirection direction) {
+        m_lastSortColumn = column;
+        m_lastSortDirection = direction;
     }
 };
 
