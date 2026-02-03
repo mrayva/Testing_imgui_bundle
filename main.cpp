@@ -14,7 +14,6 @@
 #include <sqlpp23/sqlpp23.h>
 #include "database/database_manager.h"
 #include "database/schemas/table_foo.h"
-#include "database/repositories/foo_repository.h"
 #include "database/async_table_widget.h"
 #include "nats_client.h"
 
@@ -23,8 +22,7 @@ namespace ed = ax::NodeEditor;
 static std::vector<std::string> g_FontNames = {"Default Font"};
 static int g_GlobalFontIdx = 0;
 
-// Database Manager and Demo Repository
-static FooRepository* g_fooRepo = nullptr;  // Initialized after database
+// Database results (legacy, can be removed if not used elsewhere)
 static std::vector<std::string> g_db_results;
 
 // Async Table Widget (Zero-Lock Rendering)
@@ -149,23 +147,47 @@ void Gui() {
         
         ImGui::Separator();
         
-        // sqlpp23 Demo
+        // sqlpp23 Demo (Direct queries, no repository!)
         if (ImGui::CollapsingHeader("Type-safe SQL (sqlpp23) Example")) {
-            if (DatabaseManager::Get().IsInitialized() && g_fooRepo) {
+            if (DatabaseManager::Get().IsInitialized()) {
+                static std::string lastError;
+                
                 if (ImGui::Button("Insert Random Row")) {
                     static int next_id = 100; // Start higher to avoid collision with seed
                     auto name = "User " + std::to_string(next_id);
-                    g_fooRepo->Insert(next_id++, name, true);
+                    try {
+                        DatabaseManager::Get().GetConnection()(
+                            sqlpp::insert_into(test_db::foo).set(
+                                test_db::foo.Id = next_id++,
+                                test_db::foo.Name = name,
+                                test_db::foo.HasFun = true
+                            )
+                        );
+                        lastError.clear();
+                    } catch (const std::exception& e) {
+                        lastError = e.what();
+                    }
                 }
 
                 ImGui::SameLine();
                 if (ImGui::Button("Select All Rows")) {
-                    g_db_results = g_fooRepo->SelectAllAsStrings();
+                    try {
+                        g_db_results.clear();
+                        for (const auto& row : DatabaseManager::Get().GetConnection()(
+                            sqlpp::select(test_db::foo.Id, test_db::foo.Name)
+                            .from(test_db::foo)
+                        )) {
+                            g_db_results.push_back("ID: " + std::to_string(row.Id) + ", Name: " + std::string(row.Name));
+                        }
+                        lastError.clear();
+                    } catch (const std::exception& e) {
+                        lastError = e.what();
+                    }
                 }
 
-                if (g_fooRepo->HasError()) {
-                    ImGui::TextColored(ImVec4(1, 0, 0, 1), "Error: %s", g_fooRepo->GetLastError().c_str());
-                    if (ImGui::Button("Clear Error")) g_fooRepo->ClearError();
+                if (!lastError.empty()) {
+                    ImGui::TextColored(ImVec4(1, 0, 0, 1), "Error: %s", lastError.c_str());
+                    if (ImGui::Button("Clear Error")) lastError.clear();
                 }
 
                 ImGui::Separator();
@@ -178,9 +200,16 @@ void Gui() {
                 if (ImGui::Button("Retry Init")) {
                     DatabaseManager& db = DatabaseManager::Get();
                     if (db.Initialize()) {
-                        if (!g_fooRepo) g_fooRepo = new FooRepository(db);
-                        g_fooRepo->CreateTable();
-                        g_fooRepo->SeedDemoData();
+                        try {
+                            db.GetConnection()("CREATE TABLE IF NOT EXISTS foo (id BIGINT, name TEXT, has_fun BOOLEAN)");
+                            db.GetConnection()(
+                                sqlpp::insert_into(test_db::foo).set(
+                                    test_db::foo.Id = 1,
+                                    test_db::foo.Name = "Initial User",
+                                    test_db::foo.HasFun = true
+                                )
+                            );
+                        } catch (...) {}
                     }
                 }
             }
@@ -320,10 +349,21 @@ int main(int, char**) {
     DatabaseManager& g_dbManager = DatabaseManager::Get();
     g_dbManager.Initialize(DatabaseConfig::Memory());
     
-    // Create demo repository and setup table
-    g_fooRepo = new FooRepository(g_dbManager);
-    g_fooRepo->CreateTable();
-    g_fooRepo->SeedDemoData();
+    // Create table and seed data directly (no repository needed!)
+    try {
+        g_dbManager.GetConnection()("CREATE TABLE IF NOT EXISTS foo (id BIGINT, name TEXT, has_fun BOOLEAN)");
+        
+        // Seed initial data using sqlpp23
+        g_dbManager.GetConnection()(
+            sqlpp::insert_into(test_db::foo).set(
+                test_db::foo.Id = 1,
+                test_db::foo.Name = "Initial User",
+                test_db::foo.HasFun = true
+            )
+        );
+    } catch (const std::exception& e) {
+        // Handle error - will show in UI
+    }
     
     // Setup Async Table Widget
     g_asyncTable = new db::AsyncTableWidget();
@@ -332,8 +372,8 @@ int main(int, char**) {
     g_asyncTable->AddColumn("Has Fun", 100.0f);
     g_asyncTable->EnableFilter(true);
     
-    // Set refresh callback (NEW: Uses sqlpp23 rows directly, no FooRow!)
-    // Define a simple struct to hold typed data (avoids FooRow dependency)
+    // Set refresh callback (Uses sqlpp23 directly with type erasure!)
+    // Define a simple struct to hold typed data
     struct FooTypedData {
         int64_t id;
         std::string name;
@@ -349,24 +389,21 @@ int main(int, char**) {
             .from(test_db::foo)
         );
         
-        // Convert sqlpp23 rows, storing typed data for sorting
+        // Convert sqlpp23 rows with TYPE ERASURE (no FooRepository!)
         for (const auto& sqlppRow : results) {
-            db::AsyncTableWidget::Row row(3);
-            
             // Extract typed values from sqlpp23 row
             int64_t id = sqlppRow.Id;
             std::string name{sqlppRow.Name};  // string_view -> string
             bool hasFun = sqlppRow.HasFun;
             
-            // Store as strings for display/filtering
-            row.columns[0] = std::to_string(id);
-            row.columns[1] = name;
-            row.columns[2] = hasFun ? "Yes" : "No";
+            // Create typed data holder
+            FooTypedData typedData{id, name, hasFun};
             
-            // NEW: Store typed values for type-safe sorting!
-            row.userData = FooTypedData{id, name, hasFun};
-            
-            rows.push_back(row);
+            // Create row with BOTH strings (for display) and typed data (for sorting)
+            rows.push_back({
+                {std::to_string(id), name, hasFun ? "Yes" : "No"},  // columns
+                typedData  // userData - MANDATORY!
+            });
         }
     });
     
