@@ -11,7 +11,9 @@
 #include <filesystem>
 #include <thread>
 #include <atomic>
+#include <sqlpp23/sqlpp23.h>
 #include "database/database_manager.h"
+#include "database/schemas/table_foo.h"
 #include "database/repositories/foo_repository.h"
 #include "database/async_table_widget.h"
 #include "nats_client.h"
@@ -115,14 +117,19 @@ void Gui() {
             }
         }
 
-        // Async Table Demo (Zero-Lock)
-        if (ImGui::CollapsingHeader("Async Table Widget (Zero-Lock Rendering)")) {
+        // Async Table Demo (Zero-Lock + TYPE ERASURE)
+        if (ImGui::CollapsingHeader("Async Table Widget (Zero-Lock + Type Erasure) ✓")) {
             if (g_asyncTable) {
                 ImGui::TextColored(ImVec4(0, 1, 0, 1), 
-                    "This table uses double-buffering for zero-lock rendering!");
-                ImGui::Text("Background thread updates every 3 seconds.");
-                ImGui::Text("UI never blocks, even during refresh.");
-                
+                    "✓ Type Erasure: No FooRow struct needed!");
+                ImGui::Text("- Query returns sqlpp23 result rows directly");
+                ImGui::Text("- Typed data stored in Row.userData (std::any)");
+                ImGui::Text("- Type-safe sorting on int64/bool/string");
+                ImGui::Text("- String conversion only at render time");
+                ImGui::Separator();
+                ImGui::TextColored(ImVec4(0.2f, 0.8f, 1.0f, 1.0f),
+                    "Try sorting by ID - it sorts numerically (typed)!");
+                ImGui::Text("Background thread updates every 3 seconds");
                 ImGui::Separator();
                 
                 // Manual refresh button
@@ -131,9 +138,6 @@ void Gui() {
                         if (g_asyncTable) g_asyncTable->Refresh();
                     }).detach();
                 }
-                
-                ImGui::SameLine();
-                ImGui::Text("Rows: %zu", g_asyncTable->GetRowCount());
                 
                 // Render the table (zero locks!)
                 g_asyncTable->Render();
@@ -328,18 +332,64 @@ int main(int, char**) {
     g_asyncTable->AddColumn("Has Fun", 100.0f);
     g_asyncTable->EnableFilter(true);
     
-    // Set refresh callback
+    // Set refresh callback (NEW: Uses sqlpp23 rows directly, no FooRow!)
+    // Define a simple struct to hold typed data (avoids FooRow dependency)
+    struct FooTypedData {
+        int64_t id;
+        std::string name;
+        bool hasFun;
+    };
+    
     g_asyncTable->SetRefreshCallback([](auto& rows) {
         DatabaseManager& db = DatabaseManager::Get();
-        FooRepository repo(db);
-        auto results = repo.SelectAll();
         
-        for (const auto& r : results) {
+        // Execute query - get sqlpp23 result
+        auto results = db.GetConnection()(
+            sqlpp::select(sqlpp::all_of(test_db::foo))
+            .from(test_db::foo)
+        );
+        
+        // Convert sqlpp23 rows, storing typed data for sorting
+        for (const auto& sqlppRow : results) {
             db::AsyncTableWidget::Row row(3);
-            row.columns[0] = std::to_string(r.id);
-            row.columns[1] = r.name;
-            row.columns[2] = r.has_fun ? "Yes" : "No";
+            
+            // Extract typed values from sqlpp23 row
+            int64_t id = sqlppRow.Id;
+            std::string name{sqlppRow.Name};  // string_view -> string
+            bool hasFun = sqlppRow.HasFun;
+            
+            // Store as strings for display/filtering
+            row.columns[0] = std::to_string(id);
+            row.columns[1] = name;
+            row.columns[2] = hasFun ? "Yes" : "No";
+            
+            // NEW: Store typed values for type-safe sorting!
+            row.userData = FooTypedData{id, name, hasFun};
+            
             rows.push_back(row);
+        }
+    });
+    
+    // NEW: Set typed extractors for type-safe sorting!
+    // Extract int64 ID for accurate numeric sorting
+    g_asyncTable->SetColumnTypedExtractor(0, [](const db::AsyncTableWidget::Row& row) -> std::any {
+        if (!row.userData.has_value()) return {};
+        try {
+            auto& data = std::any_cast<const FooTypedData&>(row.userData);
+            return std::any(data.id);
+        } catch (...) {
+            return {};
+        }
+    });
+    
+    // Extract bool for HasFun column  
+    g_asyncTable->SetColumnTypedExtractor(2, [](const db::AsyncTableWidget::Row& row) -> std::any {
+        if (!row.userData.has_value()) return {};
+        try {
+            auto& data = std::any_cast<const FooTypedData&>(row.userData);
+            return std::any(data.hasFun);
+        } catch (...) {
+            return {};
         }
     });
     

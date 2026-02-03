@@ -50,13 +50,16 @@ public:
      * This is a generic representation that sqlpp23 query results
      * get converted into. Keeps the render path independent of
      * database types.
+     * 
+     * NEW: Now supports type erasure! Store the original typed sqlpp23 row
+     * in userData for type-safe operations (sorting, custom formatters).
      */
     struct Row {
         // Raw column data as strings (easy to display, compare, filter)
         std::vector<std::string> columns;
         
-        // Optional: Store original row for custom formatters
-        // This allows formatters to access typed data
+        // Optional: Store original typed row (e.g., sqlpp23 result row)
+        // This enables type-safe sorting and formatters without FooRow structs!
         std::any userData;
         
         Row() = default;
@@ -64,6 +67,10 @@ public:
         explicit Row(size_t numColumns) : columns(numColumns) {}
         
         Row(std::initializer_list<std::string> cols) : columns(cols) {}
+        
+        // NEW: Constructor that stores both strings and typed data
+        Row(std::initializer_list<std::string> cols, std::any typedData) 
+            : columns(cols), userData(typedData) {}
     };
     
     /**
@@ -71,6 +78,19 @@ public:
      * Return true if custom rendering was done, false to use default
      */
     using CellRenderer = std::function<bool(const Row&, int colIndex)>;
+    
+    /**
+     * @brief Typed value extractor - extracts typed value from Row.userData
+     * Use this to access sqlpp23 row fields directly for type-safe operations
+     * 
+     * Example:
+     *   [](const Row& row) -> std::any {
+     *       if (!row.userData.has_value()) return {};
+     *       auto& sqlppRow = std::any_cast<const SqlppRowType&>(row.userData);
+     *       return std::any(static_cast<int64_t>(sqlppRow.Id));
+     *   }
+     */
+    using TypedExtractor = std::function<std::any(const Row&)>;
     
     /**
      * @brief Column configuration with advanced features
@@ -86,6 +106,10 @@ public:
         // Optional: Custom cell renderer (for icons, colors, buttons, etc.)
         // If returns true, default text rendering is skipped
         CellRenderer cellRenderer;
+        
+        // NEW: Typed value extractor for type-safe sorting
+        // If provided, sorting uses typed values instead of strings
+        TypedExtractor typedExtractor;
         
         // Optional: Icon texture for this column's cells
         ImTextureID iconTexture = 0;  // nullptr is not valid for ImTextureID (it's unsigned long long)
@@ -166,6 +190,25 @@ public:
      */
     void SetRefreshCallback(std::function<void(std::vector<Row>&)> callback) {
         m_refreshCallback = callback;
+    }
+    
+    /**
+     * @brief Set typed extractor for a column (enables type-safe sorting)
+     * 
+     * Example with sqlpp23:
+     *   widget.SetColumnTypedExtractor(0, [](const Row& row) -> std::any {
+     *       if (!row.userData.has_value()) return {};
+     *       auto& sqlppRow = std::any_cast<const MyResultRow&>(row.userData);
+     *       return std::any(static_cast<int64_t>(sqlppRow.Id));
+     *   });
+     * 
+     * When a typed extractor is set, sorting uses the extracted typed value
+     * instead of comparing strings. This gives accurate numeric sorting!
+     */
+    void SetColumnTypedExtractor(size_t colIndex, TypedExtractor extractor) {
+        if (colIndex < m_columns.size()) {
+            m_columns[colIndex].typedExtractor = extractor;
+        }
     }
     
     /**
@@ -321,13 +364,47 @@ public:
         // Execute refresh callback (this is where the DB query happens)
         m_refreshCallback(backBuffer);
         
-        // Apply sorting if requested
+        // Apply sorting if requested (sort on TYPED data when available!)
         if (m_lastSortColumn >= 0 && m_lastSortColumn < (int)m_columns.size()) {
             bool ascending = (m_lastSortDirection == ImGuiSortDirection_Ascending);
+            const auto& colCfg = m_columns[m_lastSortColumn];
             
-            std::sort(backBuffer.begin(), backBuffer.end(), 
-                [this, ascending](const Row& a, const Row& b) {
+            std::sort(backBuffer.begin(), backBuffer.end(),
+                [&colCfg, ascending, this](const Row& a, const Row& b) {
                     int col = m_lastSortColumn;
+                    
+                    // If typed extractor available, use it for type-safe sorting!
+                    if (colCfg.typedExtractor) {
+                        std::any aVal = colCfg.typedExtractor(a);
+                        std::any bVal = colCfg.typedExtractor(b);
+                        
+                        if (!aVal.has_value() || !bVal.has_value()) {
+                            return false;  // Can't compare empty values
+                        }
+                        
+                        // Try common types for typed comparison
+                        if (auto* av = std::any_cast<int64_t>(&aVal)) {
+                            auto bv = std::any_cast<int64_t>(bVal);
+                            return ascending ? (*av < bv) : (*av > bv);
+                        } else if (auto* av = std::any_cast<int>(&aVal)) {
+                            auto bv = std::any_cast<int>(bVal);
+                            return ascending ? (*av < bv) : (*av > bv);
+                        } else if (auto* av = std::any_cast<double>(&aVal)) {
+                            auto bv = std::any_cast<double>(bVal);
+                            return ascending ? (*av < bv) : (*av > bv);
+                        } else if (auto* av = std::any_cast<bool>(&aVal)) {
+                            auto bv = std::any_cast<bool>(bVal);
+                            return ascending ? (*av < bv) : (*av > bv);
+                        } else if (auto* av = std::any_cast<std::string>(&aVal)) {
+                            auto bv = std::any_cast<std::string>(bVal);
+                            return ascending ? (*av < bv) : (*av > bv);
+                        } else if (auto* av = std::any_cast<std::string_view>(&aVal)) {
+                            auto bv = std::any_cast<std::string_view>(bVal);
+                            return ascending ? (*av < bv) : (*av > bv);
+                        }
+                    }
+                    
+                    // Fallback: Sort on string columns (old behavior)
                     if (col >= (int)a.columns.size() || col >= (int)b.columns.size()) {
                         return false;
                     }
