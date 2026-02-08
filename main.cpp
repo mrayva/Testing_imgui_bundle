@@ -11,6 +11,8 @@
 #include <filesystem>
 #include <thread>
 #include <atomic>
+#include <mutex>
+#include <condition_variable>
 #include <sqlpp23/sqlpp23.h>
 #include "database/database_manager.h"
 #include "database/schemas/table_foo.h"
@@ -29,6 +31,8 @@ static std::vector<std::string> g_db_results;
 static db::AsyncTableWidget* g_asyncTable = nullptr;
 static std::thread g_refreshThread;
 static std::atomic<bool> g_refreshRunning{false};
+static std::mutex g_refreshMutex;
+static std::condition_variable g_refreshCV;
 
 // NATS State
 static NatsClient g_natsClient;
@@ -75,19 +79,19 @@ void Gui() {
 
         // Node Editor Demo (Very basic placeholder)
         if (ImGui::CollapsingHeader("Node Editor Example")) {
-             ed::SetCurrentEditor(ImmApp::DefaultNodeEditorContext());
-             ed::Begin("My Node Editor");
-             ed::BeginNode(1);
-                 ImGui::Text("Node A");
-                 ed::BeginPin(2, ed::PinKind::Input);
-                     ImGui::Text("-> In");
-                 ed::EndPin();
-                 ImGui::SameLine();
-                 ed::BeginPin(3, ed::PinKind::Output);
-                     ImGui::Text("Out ->");
-                 ed::EndPin();
-             ed::EndNode();
-             ed::End();
+            ed::SetCurrentEditor(ImmApp::DefaultNodeEditorContext());
+            ed::Begin("My Node Editor");
+            ed::BeginNode(1);
+            ImGui::Text("Node A");
+            ed::BeginPin(2, ed::PinKind::Input);
+            ImGui::Text("-> In");
+            ed::EndPin();
+            ImGui::SameLine();
+            ed::BeginPin(3, ed::PinKind::Output);
+            ImGui::Text("Out ->");
+            ed::EndPin();
+            ed::EndNode();
+            ed::End();
         }
 
         // Reaction Demo
@@ -108,7 +112,7 @@ void Gui() {
 
             ImGui::Separator();
             ImGui::Text("Computed 'sum' (a + b): %d", sum.get());
-            
+
             if (ImGui::Button("Reset Reaction Variables")) {
                 a.value(10);
                 b.value(20);
@@ -118,51 +122,44 @@ void Gui() {
         // Async Table Demo (Zero-Lock + TYPE ERASURE)
         if (ImGui::CollapsingHeader("Async Table Widget (Zero-Lock + Type Erasure) ✓")) {
             if (g_asyncTable) {
-                ImGui::TextColored(ImVec4(0, 1, 0, 1), 
-                    "✓ Type Erasure: No FooRow struct needed!");
+                ImGui::TextColored(ImVec4(0, 1, 0, 1), "✓ Type Erasure: No FooRow struct needed!");
                 ImGui::Text("- Query returns sqlpp23 result rows directly");
                 ImGui::Text("- Typed data stored in Row.userData (std::any)");
                 ImGui::Text("- Type-safe sorting on int64/bool/string");
                 ImGui::Text("- String conversion only at render time");
                 ImGui::Separator();
-                ImGui::TextColored(ImVec4(0.2f, 0.8f, 1.0f, 1.0f),
-                    "Try sorting by ID - it sorts numerically (typed)!");
+                ImGui::TextColored(ImVec4(0.2f, 0.8f, 1.0f, 1.0f), "Try sorting by ID - it sorts numerically (typed)!");
                 ImGui::Text("Background thread updates every 3 seconds");
                 ImGui::Separator();
-                
-                // Manual refresh button
+
+                // Manual refresh button (wakes background thread)
                 if (ImGui::Button("Manual Refresh")) {
-                    std::thread([]{
-                        if (g_asyncTable) g_asyncTable->Refresh();
-                    }).detach();
+                    g_refreshCV.notify_one();
                 }
-                
+
                 // Render the table (zero locks!)
                 g_asyncTable->Render();
-                
+
             } else {
                 ImGui::TextColored(ImVec4(1, 0, 0, 1), "Async table not initialized");
             }
         }
-        
+
         ImGui::Separator();
-        
+
         // sqlpp23 Demo (Direct queries, no repository!)
         if (ImGui::CollapsingHeader("Type-safe SQL (sqlpp23) Example")) {
             if (DatabaseManager::Get().IsInitialized()) {
                 static std::string lastError;
-                
+
                 if (ImGui::Button("Insert Random Row")) {
                     static int next_id = 100; // Start higher to avoid collision with seed
                     auto name = "User " + std::to_string(next_id);
                     try {
-                        DatabaseManager::Get().GetConnection()(
-                            sqlpp::insert_into(test_db::foo).set(
-                                test_db::foo.Id = next_id++,
-                                test_db::foo.Name = name,
-                                test_db::foo.HasFun = true
-                            )
-                        );
+                        DatabaseManager::Get().GetConnection()(sqlpp::insert_into(test_db::foo)
+                                                                   .set(test_db::foo.Id = next_id++,
+                                                                        test_db::foo.Name = name,
+                                                                        test_db::foo.HasFun = true));
                         lastError.clear();
                     } catch (const std::exception& e) {
                         lastError = e.what();
@@ -174,10 +171,9 @@ void Gui() {
                     try {
                         g_db_results.clear();
                         for (const auto& row : DatabaseManager::Get().GetConnection()(
-                            sqlpp::select(test_db::foo.Id, test_db::foo.Name)
-                            .from(test_db::foo)
-                        )) {
-                            g_db_results.push_back("ID: " + std::to_string(row.Id) + ", Name: " + std::string(row.Name));
+                                 sqlpp::select(test_db::foo.Id, test_db::foo.Name).from(test_db::foo))) {
+                            g_db_results.push_back("ID: " + std::to_string(row.Id) +
+                                                   ", Name: " + std::string(row.Name));
                         }
                         lastError.clear();
                     } catch (const std::exception& e) {
@@ -201,14 +197,11 @@ void Gui() {
                     DatabaseManager& db = DatabaseManager::Get();
                     if (db.Initialize()) {
                         try {
-                            db.GetConnection()("CREATE TABLE IF NOT EXISTS foo (id BIGINT, name TEXT, has_fun BOOLEAN)");
                             db.GetConnection()(
-                                sqlpp::insert_into(test_db::foo).set(
-                                    test_db::foo.Id = 1,
-                                    test_db::foo.Name = "Initial User",
-                                    test_db::foo.HasFun = true
-                                )
-                            );
+                                "CREATE TABLE IF NOT EXISTS foo (id BIGINT, name TEXT, has_fun BOOLEAN)");
+                            db.GetConnection()(sqlpp::insert_into(test_db::foo)
+                                                   .set(test_db::foo.Id = 1, test_db::foo.Name = "Initial User",
+                                                        test_db::foo.HasFun = true));
                         } catch (...) {}
                     }
                 }
@@ -219,32 +212,31 @@ void Gui() {
         if (ImGui::CollapsingHeader("Font Rendering (FreeType) Info")) {
             ImGui::Text("FreeType: ACTIVE");
             if (ImGui::GetIO().Fonts->TexData) {
-                ImGui::Text("Font Atlas: %d x %d", ImGui::GetIO().Fonts->TexData->Width, ImGui::GetIO().Fonts->TexData->Height);
+                ImGui::Text("Font Atlas: %d x %d", ImGui::GetIO().Fonts->TexData->Width,
+                            ImGui::GetIO().Fonts->TexData->Height);
             }
-            
+
             ImGui::Separator();
             ImGui::BulletText("Smoothing logic provided by FreeType engine.");
             ImGui::BulletText("Supports complex glyphs and SVG fonts (via plutosvg).");
 
-            #ifdef IMGUI_ENABLE_FREETYPE
+#ifdef IMGUI_ENABLE_FREETYPE
             ImGui::TextColored(ImVec4(0, 1, 0, 1), "vcpkg-linked FreeType is strictly enabled.");
-            #else
+#else
             ImGui::TextColored(ImVec4(1, 1, 0, 1), "FreeType might be active via default bundle fallback.");
-            #endif
+#endif
 
             if (ImGui::TreeNode("System Font Browser")) {
                 static int selected_font = 0;
                 ImGui::Text("Detected Fonts: %zu", g_FontNames.size());
-                
+
                 if (ImGui::BeginListBox("##Fonts", ImVec2(-FLT_MIN, 10 * ImGui::GetTextLineHeightWithSpacing()))) {
                     for (int n = 0; n < (int)g_FontNames.size(); n++) {
                         const bool is_selected = (selected_font == n);
-                        if (ImGui::Selectable(g_FontNames[n].c_str(), is_selected))
-                            selected_font = n;
+                        if (ImGui::Selectable(g_FontNames[n].c_str(), is_selected)) selected_font = n;
 
                         // Set the initial focus when opening the combo (scrolling + keyboard navigation focus)
-                        if (is_selected)
-                            ImGui::SetItemDefaultFocus();
+                        if (is_selected) ImGui::SetItemDefaultFocus();
                     }
                     ImGui::EndListBox();
                 }
@@ -266,21 +258,18 @@ void Gui() {
             }
 
 
-
             if (ImGui::TreeNode("Advanced FreeType Settings")) {
 
                 static int hinting_mode = 2; // Default to Light
-                const char* modes[] = { "None", "No Hinting", "Light", "Normal", "Mono" };
+                const char* modes[] = {"None", "No Hinting", "Light", "Normal", "Mono"};
                 if (ImGui::Combo("Hinting Mode", &hinting_mode, modes, IM_ARRAYSIZE(modes))) {
                     // Note: Changing these typically requires rebuilding the font atlas
-                    ImGui::GetIO().Fonts->FontLoaderFlags = (1 << hinting_mode); 
+                    ImGui::GetIO().Fonts->FontLoaderFlags = (1 << hinting_mode);
                     ImGui::TextColored(ImVec4(1, 0.5f, 0, 1), "Settings changed. Atlas needs re-build.");
                 }
                 ImGui::TreePop();
             }
         }
-
-
 
 
         // NATS Demo
@@ -316,7 +305,7 @@ void Gui() {
 
             ImGui::Separator();
             ImGui::Text("NATS Log / Messages:");
-            
+
             // Poll for new messages
             auto newMsgs = g_natsClient.PollMessages();
             for (const auto& m : newMsgs) {
@@ -327,14 +316,12 @@ void Gui() {
                 for (const auto& entry : g_natsLog) {
                     ImGui::TextUnformatted(entry.c_str());
                 }
-                if (ImGui::GetScrollY() >= ImGui::GetScrollMaxY())
-                    ImGui::SetScrollHereY(1.0f);
+                if (ImGui::GetScrollY() >= ImGui::GetScrollMaxY()) ImGui::SetScrollHereY(1.0f);
             }
             ImGui::EndChild();
-            
+
             if (ImGui::Button("Clear Log")) g_natsLog.clear();
         }
-
     }
     ImGui::End();
 
@@ -348,30 +335,26 @@ int main(int, char**) {
     // Initialize database (default: memory mode)
     DatabaseManager& g_dbManager = DatabaseManager::Get();
     g_dbManager.Initialize(DatabaseConfig::Memory());
-    
+
     // Create table and seed data directly (no repository needed!)
     try {
         g_dbManager.GetConnection()("CREATE TABLE IF NOT EXISTS foo (id BIGINT, name TEXT, has_fun BOOLEAN)");
-        
+
         // Seed initial data using sqlpp23
         g_dbManager.GetConnection()(
-            sqlpp::insert_into(test_db::foo).set(
-                test_db::foo.Id = 1,
-                test_db::foo.Name = "Initial User",
-                test_db::foo.HasFun = true
-            )
-        );
+            sqlpp::insert_into(test_db::foo)
+                .set(test_db::foo.Id = 1, test_db::foo.Name = "Initial User", test_db::foo.HasFun = true));
     } catch (const std::exception& e) {
         // Handle error - will show in UI
     }
-    
+
     // Setup Async Table Widget
     g_asyncTable = new db::AsyncTableWidget();
     g_asyncTable->AddColumn("ID", 80.0f);
     g_asyncTable->AddColumn("Name", 200.0f);
     g_asyncTable->AddColumn("Has Fun", 100.0f);
     g_asyncTable->EnableFilter(true);
-    
+
     // Set refresh callback (Uses sqlpp23 directly with type erasure!)
     // Define a simple struct to hold typed data
     struct FooTypedData {
@@ -379,34 +362,31 @@ int main(int, char**) {
         std::string name;
         bool hasFun;
     };
-    
+
     g_asyncTable->SetRefreshCallback([](auto& rows) {
         DatabaseManager& db = DatabaseManager::Get();
-        
+
         // Execute query - get sqlpp23 result
-        auto results = db.GetConnection()(
-            sqlpp::select(sqlpp::all_of(test_db::foo))
-            .from(test_db::foo)
-        );
-        
+        auto results = db.GetConnection()(sqlpp::select(sqlpp::all_of(test_db::foo)).from(test_db::foo));
+
         // Convert sqlpp23 rows with TYPE ERASURE (no FooRepository!)
         for (const auto& sqlppRow : results) {
             // Extract typed values from sqlpp23 row
             int64_t id = sqlppRow.Id;
-            std::string name{sqlppRow.Name};  // string_view -> string
+            std::string name{sqlppRow.Name}; // string_view -> string
             bool hasFun = sqlppRow.HasFun;
-            
+
             // Create typed data holder
             FooTypedData typedData{id, name, hasFun};
-            
+
             // Create row with BOTH strings (for display) and typed data (for sorting)
             rows.push_back({
-                {std::to_string(id), name, hasFun ? "Yes" : "No"},  // columns
-                typedData  // userData - MANDATORY!
+                {std::to_string(id), name, hasFun ? "Yes" : "No"}, // columns
+                typedData                                          // userData - MANDATORY!
             });
         }
     });
-    
+
     // NEW: Set typed extractors for type-safe sorting!
     // Extract int64 ID for accurate numeric sorting
     g_asyncTable->SetColumnTypedExtractor(0, [](const db::AsyncTableWidget::Row& row) -> std::any {
@@ -418,8 +398,8 @@ int main(int, char**) {
             return {};
         }
     });
-    
-    // Extract bool for HasFun column  
+
+    // Extract bool for HasFun column
     g_asyncTable->SetColumnTypedExtractor(2, [](const db::AsyncTableWidget::Row& row) -> std::any {
         if (!row.userData.has_value()) return {};
         try {
@@ -429,15 +409,19 @@ int main(int, char**) {
             return {};
         }
     });
-    
+
     // Initial load
     g_asyncTable->Refresh();
-    
-    // Start background refresh thread (every 3 seconds)
+
+    // Start background refresh thread (every 3 seconds, or on manual trigger)
     g_refreshRunning = true;
     g_refreshThread = std::thread([]() {
         while (g_refreshRunning) {
-            std::this_thread::sleep_for(std::chrono::seconds(3));
+            {
+                std::unique_lock<std::mutex> lock(g_refreshMutex);
+                g_refreshCV.wait_for(lock, std::chrono::seconds(3));
+            }
+            if (!g_refreshRunning) break;
             if (g_asyncTable) {
                 g_asyncTable->Refresh();
             }
@@ -448,13 +432,14 @@ int main(int, char**) {
     HelloImGui::RunnerParams runnerParams;
     runnerParams.callbacks.ShowGui = Gui;
     runnerParams.appWindowParams.windowTitle = "ImGui Bundle Kitchen Sink";
-    runnerParams.imGuiWindowParams.defaultImGuiWindowType = HelloImGui::DefaultImGuiWindowType::ProvideFullScreenDockSpace;
-    
+    runnerParams.imGuiWindowParams.defaultImGuiWindowType =
+        HelloImGui::DefaultImGuiWindowType::ProvideFullScreenDockSpace;
+
     // Load professional system fonts
     runnerParams.callbacks.LoadAdditionalFonts = []() {
         auto& io = ImGui::GetIO();
         io.Fonts->AddFontDefault();
-        
+
         std::vector<std::string> fontRoots;
 #ifdef _WIN32
         fontRoots.push_back("C:\\Windows\\Fonts");
@@ -473,7 +458,8 @@ int main(int, char**) {
         int count = 0;
         for (const auto& root : fontRoots) {
             if (std::filesystem::exists(root)) {
-                for (const auto& entry : std::filesystem::recursive_directory_iterator(root, std::filesystem::directory_options::skip_permission_denied)) {
+                for (const auto& entry : std::filesystem::recursive_directory_iterator(
+                         root, std::filesystem::directory_options::skip_permission_denied)) {
                     if (count >= 100) break; // Safety cap
                     auto ext = entry.path().extension().string();
                     if (ext == ".ttf" || ext == ".otf" || ext == ".TTF" || ext == ".OTF") {
@@ -514,6 +500,15 @@ int main(int, char**) {
     addOnsParams.withNodeEditor = true;
 
     ImmApp::Run(runnerParams, addOnsParams);
+
+    // Shutdown: stop background thread and clean up
+    g_refreshRunning = false;
+    g_refreshCV.notify_one();
+    if (g_refreshThread.joinable()) {
+        g_refreshThread.join();
+    }
+    delete g_asyncTable;
+    g_asyncTable = nullptr;
+
     return 0;
 }
-

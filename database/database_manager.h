@@ -18,13 +18,13 @@ public:
     bool Initialize(const DatabaseConfig& config = DatabaseConfig::Memory()) {
         try {
             sqlpp::sqlite3::connection_config conn_config;
-            
+
             // Determine database path based on mode
             switch (config.mode) {
                 case DatabaseMode::Memory:
                     conn_config.path_to_database = ":memory:";
                     break;
-                    
+
                 case DatabaseMode::NativeFile:
                     if (config.path.empty()) {
                         m_lastError = "NativeFile mode requires a path";
@@ -32,7 +32,7 @@ public:
                     }
                     conn_config.path_to_database = config.path;
                     break;
-                    
+
                 case DatabaseMode::OPFS:
 #ifdef __EMSCRIPTEN__
                     // OPFS mode for WebAssembly
@@ -48,25 +48,27 @@ public:
 #endif
                     break;
             }
-            
+
             // Set appropriate flags
+            // SQLITE_OPEN_FULLMUTEX enables serialized mode so the connection
+            // is safe to use from multiple threads (required for background refresh)
             if (config.create_if_missing) {
-                conn_config.flags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE;
+                conn_config.flags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX;
             } else {
-                conn_config.flags = SQLITE_OPEN_READWRITE;
+                conn_config.flags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_FULLMUTEX;
             }
-            
+
             m_db = std::make_unique<sqlpp::sqlite3::connection>(conn_config);
             m_lastError.clear();
             m_currentMode = config.mode;
-            
+
             // Apply performance tuning
             if (config.tuning.enabled) {
                 ApplyPerformanceTuning(config.tuning);
             }
-            
+
             return true;
-            
+
         } catch (const std::exception& e) {
             m_lastError = e.what();
             return false;
@@ -82,14 +84,10 @@ public:
     }
 
     // Check if connection is valid
-    bool IsInitialized() const { 
-        return m_db != nullptr; 
-    }
-    
+    bool IsInitialized() const { return m_db != nullptr; }
+
     // Get current mode
-    DatabaseMode GetMode() const {
-        return m_currentMode;
-    }
+    DatabaseMode GetMode() const { return m_currentMode; }
 
     // Error handling
     std::string GetLastError() const { return m_lastError; }
@@ -101,7 +99,7 @@ public:
         if (!m_db) {
             throw std::runtime_error("Database not initialized");
         }
-        
+
         try {
             // Note: page_size must be set BEFORE any tables are created
             (*m_db)("PRAGMA page_size = " + std::to_string(tuning.page_size) + ";");
@@ -117,19 +115,19 @@ public:
     // ============================================================================
     // SQLite Online Backup API
     // ============================================================================
-    
+
     /**
      * @brief Load an entire database from disk/OPFS into the current (memory) database
-     * 
+     *
      * This is the most efficient way to load a disk database into :memory: because
      * it copies raw pages directly without parsing SQL or executing INSERT statements.
-     * 
+     *
      * @param source_path Path to the source database file
      * @return true if backup succeeded, false otherwise
-     * 
+     *
      * @note Current database should be :memory: for best results
      * @note This is a blocking operation - use BackupFromFileIncremental for non-blocking
-     * 
+     *
      * Example:
      *   DatabaseManager::Get().Initialize(DatabaseConfig::Memory());
      *   if (!DatabaseManager::Get().BackupFromFile("/opfs/data.db")) {
@@ -147,36 +145,36 @@ public:
             sqlpp::sqlite3::connection_config source_config;
             source_config.path_to_database = source_path;
             source_config.flags = SQLITE_OPEN_READONLY;
-            
+
             sqlpp::sqlite3::connection source_db(source_config);
-            
+
             // Get raw C handles
             sqlite3* pSrc = source_db.native_handle();
             sqlite3* pDest = m_db->native_handle();
-            
+
             if (!pSrc || !pDest) {
                 m_lastError = "Failed to get database handles";
                 return false;
             }
-            
+
             // Perform backup
             sqlite3_backup* pBackup = sqlite3_backup_init(pDest, "main", pSrc, "main");
             if (!pBackup) {
                 m_lastError = std::string("Backup init failed: ") + sqlite3_errmsg(pDest);
                 return false;
             }
-            
+
             // Copy entire database in one step (-1 = all pages)
             int rc = sqlite3_backup_step(pBackup, -1);
             sqlite3_backup_finish(pBackup);
-            
+
             if (rc != SQLITE_DONE) {
                 m_lastError = std::string("Backup failed: ") + sqlite3_errmsg(pDest);
                 return false;
             }
-            
+
             return true;
-            
+
         } catch (const std::exception& e) {
             m_lastError = std::string("Backup exception: ") + e.what();
             return false;
@@ -185,27 +183,24 @@ public:
 
     /**
      * @brief Incrementally backup from source to current database
-     * 
+     *
      * This allows non-blocking database loading by copying N pages at a time.
      * Useful in WASM environments to avoid blocking the main thread.
-     * 
+     *
      * @param source_path Path to source database
      * @param pages_per_step Number of pages to copy per step (-1 = all at once)
      * @param progress_callback Optional callback(remaining_pages, total_pages)
      * @return true if backup completed successfully
-     * 
+     *
      * Example (non-blocking):
-     *   DatabaseManager::Get().BackupFromFileIncremental("/opfs/data.db", 100, 
+     *   DatabaseManager::Get().BackupFromFileIncremental("/opfs/data.db", 100,
      *       [](int remaining, int total) {
      *           std::cout << "Progress: " << (100 * (total - remaining) / total) << "%" << std::endl;
      *       }
      *   );
      */
-    bool BackupFromFileIncremental(
-        const std::string& source_path,
-        int pages_per_step = 100,
-        std::function<void(int remaining, int total)> progress_callback = nullptr
-    ) {
+    bool BackupFromFileIncremental(const std::string& source_path, int pages_per_step = 100,
+                                   std::function<void(int remaining, int total)> progress_callback = nullptr) {
         if (!m_db) {
             m_lastError = "Database not initialized";
             return false;
@@ -216,52 +211,52 @@ public:
             sqlpp::sqlite3::connection_config source_config;
             source_config.path_to_database = source_path;
             source_config.flags = SQLITE_OPEN_READONLY;
-            
+
             sqlpp::sqlite3::connection source_db(source_config);
-            
+
             // Get raw C handles
             sqlite3* pSrc = source_db.native_handle();
             sqlite3* pDest = m_db->native_handle();
-            
+
             if (!pSrc || !pDest) {
                 m_lastError = "Failed to get database handles";
                 return false;
             }
-            
+
             // Initialize backup
             sqlite3_backup* pBackup = sqlite3_backup_init(pDest, "main", pSrc, "main");
             if (!pBackup) {
                 m_lastError = std::string("Backup init failed: ") + sqlite3_errmsg(pDest);
                 return false;
             }
-            
+
             // Incremental backup loop
             int rc;
             do {
                 rc = sqlite3_backup_step(pBackup, pages_per_step);
-                
+
                 if (progress_callback) {
                     int remaining = sqlite3_backup_remaining(pBackup);
                     int total = sqlite3_backup_pagecount(pBackup);
                     progress_callback(remaining, total);
                 }
-                
+
                 // Allow other work to happen (important for WASM)
                 if (rc == SQLITE_OK || rc == SQLITE_BUSY || rc == SQLITE_LOCKED) {
                     sqlite3_sleep(10); // Give other threads/work a chance
                 }
-                
+
             } while (rc == SQLITE_OK || rc == SQLITE_BUSY || rc == SQLITE_LOCKED);
-            
+
             sqlite3_backup_finish(pBackup);
-            
+
             if (rc != SQLITE_DONE) {
                 m_lastError = std::string("Backup failed: ") + sqlite3_errmsg(pDest);
                 return false;
             }
-            
+
             return true;
-            
+
         } catch (const std::exception& e) {
             m_lastError = std::string("Backup exception: ") + e.what();
             return false;
@@ -270,12 +265,12 @@ public:
 
     /**
      * @brief Backup current database to a file
-     * 
+     *
      * Useful for saving an in-memory database to disk/OPFS.
-     * 
+     *
      * @param dest_path Path where to save the database
      * @return true if backup succeeded
-     * 
+     *
      * Example:
      *   // Save memory database to OPFS
      *   DatabaseManager::Get().BackupToFile("/opfs/saved.db");
@@ -291,35 +286,35 @@ public:
             sqlpp::sqlite3::connection_config dest_config;
             dest_config.path_to_database = dest_path;
             dest_config.flags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE;
-            
+
             sqlpp::sqlite3::connection dest_db(dest_config);
-            
+
             // Get raw C handles (note: reversed from BackupFromFile)
             sqlite3* pSrc = m_db->native_handle();
             sqlite3* pDest = dest_db.native_handle();
-            
+
             if (!pSrc || !pDest) {
                 m_lastError = "Failed to get database handles";
                 return false;
             }
-            
+
             // Perform backup
             sqlite3_backup* pBackup = sqlite3_backup_init(pDest, "main", pSrc, "main");
             if (!pBackup) {
                 m_lastError = std::string("Backup init failed: ") + sqlite3_errmsg(pDest);
                 return false;
             }
-            
+
             int rc = sqlite3_backup_step(pBackup, -1);
             sqlite3_backup_finish(pBackup);
-            
+
             if (rc != SQLITE_DONE) {
                 m_lastError = std::string("Backup failed: ") + sqlite3_errmsg(pDest);
                 return false;
             }
-            
+
             return true;
-            
+
         } catch (const std::exception& e) {
             m_lastError = std::string("Backup exception: ") + e.what();
             return false;
@@ -328,12 +323,12 @@ public:
 
     /**
      * @brief Get raw sqlite3* handle for advanced operations
-     * 
+     *
      * Provides access to the underlying C handle for operations not exposed
      * by sqlpp23, such as the SQLite Online Backup API, custom VFS, etc.
-     * 
+     *
      * @return Raw sqlite3* pointer or nullptr if not initialized
-     * 
+     *
      * Example:
      *   sqlite3* handle = DatabaseManager::Get().GetRawHandle();
      *   if (handle) {
@@ -341,9 +336,7 @@ public:
      *       sqlite3_exec(handle, "PRAGMA ...", nullptr, nullptr, nullptr);
      *   }
      */
-    sqlite3* GetRawHandle() {
-        return m_db ? m_db->native_handle() : nullptr;
-    }
+    sqlite3* GetRawHandle() { return m_db ? m_db->native_handle() : nullptr; }
 
 private:
     DatabaseManager() = default;

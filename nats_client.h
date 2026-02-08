@@ -4,6 +4,7 @@
 #include <vector>
 #include <functional>
 #include <mutex>
+#include <atomic>
 #include <queue>
 
 struct NatsMessage {
@@ -33,12 +34,14 @@ public:
     void UpdateStatus(const std::string& status);
     void UpdateError(const std::string& error);
 
-    bool m_connected = false;
+private:
+    std::atomic<bool> m_connected{false};
+
+    mutable std::mutex m_stateMutex;
     std::string m_lastError;
     std::string m_status = "Disconnected";
-    void* m_nativeData = nullptr; // Platform specific data
+    void* m_nativeData = nullptr;
 
-private:
     std::mutex m_messageMutex;
     std::queue<NatsMessage> m_incomingMessages;
 };

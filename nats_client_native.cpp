@@ -32,32 +32,41 @@ NatsClient::~NatsClient() {
 }
 
 bool NatsClient::Connect(const std::string& url) {
-    if (m_status == "Connecting...") return false;
-    
-    m_status = "Connecting...";
-    m_lastError = "";
-    
+    {
+        std::lock_guard<std::mutex> lock(m_stateMutex);
+        if (m_status == "Connecting...") return false;
+        m_status = "Connecting...";
+        m_lastError = "";
+    }
+
     std::string urlCopy = url;
     std::thread([this, urlCopy]() {
         natsOptions* opts = nullptr;
         natsOptions_Create(&opts);
         natsOptions_SetURL(opts, urlCopy.c_str());
         natsOptions_SetTimeout(opts, 5000); // 5 second timeout
-        
+
         natsConnection* conn = nullptr;
         natsStatus s = natsConnection_Connect(&conn, opts);
         natsOptions_Destroy(opts);
 
         if (s == NATS_OK) {
-            m_connected = true;
-            m_status = "Connected";
-            m_nativeData = new NativeData();
-            ((NativeData*)m_nativeData)->conn = conn;
+            NativeData* nd = new NativeData();
+            nd->conn = conn;
+            {
+                std::lock_guard<std::mutex> lock(m_stateMutex);
+                m_nativeData = nd;
+                m_status = "Connected";
+            }
+            m_connected.store(true, std::memory_order_release);
         } else {
-            m_connected = false;
-            m_status = "Failed";
-            m_lastError = natsStatus_GetText(s);
-            std::cerr << "NATS connection failed: " << m_lastError << std::endl;
+            {
+                std::lock_guard<std::mutex> lock(m_stateMutex);
+                m_status = "Failed";
+                m_lastError = natsStatus_GetText(s);
+            }
+            m_connected.store(false, std::memory_order_release);
+            std::cerr << "NATS connection failed: " << natsStatus_GetText(s) << std::endl;
         }
     }).detach();
 
@@ -65,22 +74,27 @@ bool NatsClient::Connect(const std::string& url) {
 }
 
 std::string NatsClient::GetConnectionStatus() const {
+    std::lock_guard<std::mutex> lock(m_stateMutex);
     return m_status;
 }
 
 std::string NatsClient::GetLastError() const {
+    std::lock_guard<std::mutex> lock(m_stateMutex);
     return m_lastError;
 }
 
 void NatsClient::UpdateStatus(const std::string& status) {
+    std::lock_guard<std::mutex> lock(m_stateMutex);
     m_status = status;
 }
 
 void NatsClient::UpdateError(const std::string& error) {
+    std::lock_guard<std::mutex> lock(m_stateMutex);
     m_lastError = error;
 }
 
 void NatsClient::Disconnect() {
+    std::lock_guard<std::mutex> lock(m_stateMutex);
     if (m_nativeData) {
         NativeData* nd = (NativeData*)m_nativeData;
         for (auto sub : nd->subs) {
@@ -93,29 +107,31 @@ void NatsClient::Disconnect() {
         delete nd;
         m_nativeData = nullptr;
     }
-    m_connected = false;
+    m_connected.store(false, std::memory_order_release);
 }
 
 bool NatsClient::IsConnected() const {
-    return m_connected;
+    return m_connected.load(std::memory_order_acquire);
 }
 
 void NatsClient::Subscribe(const std::string& subject) {
-    if (m_connected && m_nativeData) {
-        NativeData* nd = (NativeData*)m_nativeData;
-        natsSubscription* sub = nullptr;
-        natsStatus s = natsConnection_Subscribe(&sub, nd->conn, subject.c_str(), onMsg, (void*)this);
-        if (s == NATS_OK) {
-            nd->subs.push_back(sub);
-        }
+    if (!m_connected.load(std::memory_order_acquire)) return;
+    std::lock_guard<std::mutex> lock(m_stateMutex);
+    if (!m_nativeData) return;
+    NativeData* nd = (NativeData*)m_nativeData;
+    natsSubscription* sub = nullptr;
+    natsStatus s = natsConnection_Subscribe(&sub, nd->conn, subject.c_str(), onMsg, (void*)this);
+    if (s == NATS_OK) {
+        nd->subs.push_back(sub);
     }
 }
 
 void NatsClient::Publish(const std::string& subject, const std::string& data) {
-    if (m_connected && m_nativeData) {
-        NativeData* nd = (NativeData*)m_nativeData;
-        natsConnection_PublishString(nd->conn, subject.c_str(), data.c_str());
-    }
+    if (!m_connected.load(std::memory_order_acquire)) return;
+    std::lock_guard<std::mutex> lock(m_stateMutex);
+    if (!m_nativeData) return;
+    NativeData* nd = (NativeData*)m_nativeData;
+    natsConnection_PublishString(nd->conn, subject.c_str(), data.c_str());
 }
 
 void NatsClient::PushMessage(const std::string& subject, const std::string& data) {
