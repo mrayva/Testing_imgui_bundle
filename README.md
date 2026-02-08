@@ -1,83 +1,75 @@
 # C++ Modern EDSL Kitchen Sink
 
-A proof-of-concept C++ project integrating cutting-edge libraries using **C++23**. This project demonstrates how to combine immediate-mode UI, reactive programming, and type-safe SQL in a single application.
+A proof-of-concept C++ project integrating cutting-edge libraries using **C++23**. Combines immediate-mode UI, reactive programming, and type-safe SQL in a single application with native and WebAssembly targets.
 
-## 🚀 Features
+## Features
 
-- **Dear ImGui Bundle**: Complete UI framework including `HelloImGui`, `ImPlot`, and `ImNodes`.
-- **Reaction (Reactive Programming)**: A lightweight, header-only reactive framework for C++20/23.
-- **sqlpp23 (Type-safe SQL)**: A type-safe embedded domain-specific language for SQL queries, pushing C++23 features to their limit.
-- **SQLite3 Integration**: Refactored database layer with repository pattern supporting:
-  - Memory-only databases
-  - Native file-based databases
-  - OPFS (Origin Private File System) for WebAssembly with automatic performance tuning
-  - See [`database/`](database/) for comprehensive documentation
-- **Cross-Platform Font Loading**: Automatic detection of system fonts on Windows, macOS, and Linux.
-- **WebAssembly Support**: Full support for building as a web application via Emscripten.
+- **Dear ImGui Bundle** -- complete UI framework (HelloImGui, ImPlot, ImNodes)
+- **Reaction** -- lightweight, header-only reactive programming for C++20/23
+- **sqlpp23** -- type-safe embedded DSL for SQL, pushing C++23 to its limit
+- **SQLite3** -- database layer with memory, native-file, and OPFS modes
+- **Cross-platform font loading** -- automatic system font detection (Windows, macOS, Linux)
+- **WebAssembly** -- full Emscripten build producing `.wasm` + `.js` + `.data`
 
-## 🛠 Prerequisites
+## Prerequisites
 
-- **Compiler**: Clang 20+ or GCC 14+ (required for full C++23 support). 
-  - *Note: GCC 14 is recommended for native builds to avoid current GCC 15 bugs.*
-- **Package Manager**: [vcpkg](https://github.com/microsoft/vcpkg)
-- **Build System**: CMake 3.28+ and **Ninja** (highly recommended for WASM).
-- **WASM Build**: [Emscripten SDK (emsdk)](https://emscripten.org/docs/getting_started/downloads.html)
+| Tool | Version | Notes |
+|------|---------|-------|
+| **GCC** | **14** | gcc-14 / g++-14 specifically (see [gcc-15 bug](#gcc-15-deducing-this-bug) below) |
+| CMake | 3.22+ | |
+| Ninja | any | recommended over Make |
+| vcpkg | latest | `VCPKG_ROOT` or `../vcpkg` relative to project |
+| emsdk | latest | WASM builds only |
 
-## 🏗 Build Instructions
-
-### Native (Linux/Windows/macOS)
-
-**⚠️ Important**: Use **GCC 14** to avoid C++23 "deducing this" bugs in GCC 15.
+## Native Linux Build
 
 ```bash
-# Set compiler to gcc-14
 export CC=gcc-14
 export CXX=g++-14
 
-# Configure and build
-rm -rf build && mkdir build && cd build
-cmake -G Ninja \
-  -DCMAKE_TOOLCHAIN_FILE=[path/to/vcpkg]/scripts/buildsystems/vcpkg.cmake \
-  ..
-ninja
+cmake -B build -G Ninja \
+  -DCMAKE_TOOLCHAIN_FILE="${VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake"
+
+cmake --build build
 
 # Run
-./KitchenSinkImgui
+./build/KitchenSinkImgui
 ```
 
-**Alternative** (if vcpkg is in parent directory):
-```bash
-export CC=gcc-14 CXX=g++-14
-cmake -G Ninja .. && ninja
-```
+If vcpkg lives at `../vcpkg` the toolchain file is found automatically and can be omitted.
 
-### Web/WASM (Emscripten)
-
-**✅ Produces actual WebAssembly** (.wasm + .js + .html files)
+## WASM Build (Emscripten)
 
 ```bash
-# Activate Emscripten
 source ~/emsdk/emsdk_env.sh
 
-# Configure with proper toolchain
-rm -rf build_wasm && mkdir build_wasm && cd build_wasm
-cmake -G Ninja .. \
-  -DCMAKE_TOOLCHAIN_FILE=~/vcpkg/scripts/buildsystems/vcpkg.cmake \
+cmake -B build_wasm -G Ninja \
+  -DCMAKE_TOOLCHAIN_FILE="${VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake" \
   -DVCPKG_TARGET_TRIPLET=wasm32-emscripten \
-  -DVCPKG_CHAINLOAD_TOOLCHAIN_FILE=$EMSDK/upstream/emscripten/cmake/Modules/Platform/Emscripten.cmake
+  -DVCPKG_CHAINLOAD_TOOLCHAIN_FILE="$EMSDK/upstream/emscripten/cmake/Modules/Platform/Emscripten.cmake"
 
-# Build
-ninja
+cmake --build build_wasm
 
-# Run (must use HTTP server)
-python3 -m http.server 8000
-# Open: http://localhost:8000/KitchenSinkImgui.html
+# Serve (WASM requires an HTTP server)
+python3 -m http.server 8000 -d build_wasm
+# Open http://localhost:8000/KitchenSinkImgui.html
 ```
 
-**Important:** The WASM build uses Emscripten's clang, which has limited C++23 support. sqlpp23 type-safe DSL may have limitations - use raw SQL as workaround if needed.
+A custom `index.html` in the project root can also be used as the entry point.
 
-See [`BUILD_STATUS.md`](BUILD_STATUS.md) for detailed build results and [`database/`](database/) for the new database architecture.
+## gcc-15 "Deducing This" Bug
 
-## 📜 License
+gcc-15 miscompiles sqlpp23 code that relies on C++23 explicit object parameters ("deducing this"). The symptom is template deduction failures in `select()`, `insert_into()`, `update()`, and `delete_from()`. **Use gcc-14 for native builds until this is resolved upstream.**
 
-This project is licensed under the MIT License.
+## Known Issues
+
+**Emscripten + sqlpp23 DSL** -- Emscripten's clang does not yet fully support the C++23 "deducing this" feature used by sqlpp23. Type-safe query DSL calls may fail to compile under WASM. Workarounds:
+
+1. Use raw SQL via `connection.execute()` / prepared statements.
+2. Gate sqlpp23 DSL calls with `#ifndef __EMSCRIPTEN__` and provide raw-SQL fallbacks.
+
+The DatabaseManager, OPFS mode, and Backup API all work correctly in WASM -- only the sqlpp23 compile-time DSL is affected.
+
+## License
+
+MIT

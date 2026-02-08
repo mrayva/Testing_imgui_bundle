@@ -30,6 +30,12 @@ ImGui_Bundle_Kitchen_Sink.node_editor.json
 
 # WASM build artifacts
 build_wasm/
+KitchenSinkImgui.wasm
+KitchenSinkImgui.js
+KitchenSinkImgui.data
+
+# Database docs (generated/stale)
+database/*.md
 
 # Antigravity artifacts
 .gemini/
