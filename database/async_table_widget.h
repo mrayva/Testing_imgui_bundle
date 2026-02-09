@@ -7,6 +7,7 @@
 #include <memory>
 #include <any>
 #include <algorithm>
+#include <set>
 #include "imgui.h"
 #include "database_manager.h"
 
@@ -23,7 +24,14 @@ namespace db {
  * Features:
  * - Zero locks on render path (atomic swap only)
  * - Type-safe sorting via typedExtractor (no FooRow structs needed!)
+ * - Multi-column sort (Shift+click headers)
  * - ImGuiListClipper for efficient large lists
+ * - Frozen header row / frozen left columns
+ * - Row selection (single or multi via ImGui MultiSelect API)
+ * - Per-row and per-cell background colors
+ * - Right-click context menu callback
+ * - Scroll-to-row support
+ * - Column hide/show, stretch modes, horizontal scroll
  * - Customizable column formatters and renderers
  * - Background refresh support
  *
@@ -68,7 +76,7 @@ public:
      * get converted into. Keeps the render path independent of
      * database types.
      *
-     * NEW: Now supports type erasure! Store the original typed sqlpp23 row
+     * Supports type erasure: Store the original typed sqlpp23 row
      * in userData for type-safe operations (sorting, custom formatters).
      */
     struct Row {
@@ -85,7 +93,7 @@ public:
 
         Row(std::initializer_list<std::string> cols) : columns(cols) {}
 
-        // NEW: Constructor that stores both strings and typed data
+        // Constructor that stores both strings and typed data
         Row(std::initializer_list<std::string> cols, std::any typedData) : columns(cols), userData(typedData) {}
     };
 
@@ -106,6 +114,24 @@ public:
      *   }
      */
     using TypedExtractor = std::function<std::any(const Row&)>;
+
+    /**
+     * @brief Row color callback - returns background color for a row
+     * Return 0 (transparent) to use default alternating colors.
+     */
+    using RowColorCallback = std::function<ImU32(const Row& row, int rowIndex)>;
+
+    /**
+     * @brief Cell color callback - returns background color for a specific cell
+     * Return 0 (transparent) to use default.
+     */
+    using CellColorCallback = std::function<ImU32(const Row& row, int rowIndex, int colIndex)>;
+
+    /**
+     * @brief Context menu callback - called when user right-clicks a row
+     * Should call ImGui::MenuItem() etc. inside.
+     */
+    using ContextMenuCallback = std::function<void(const Row& row, int rowIndex)>;
 
     /**
      * @brief Column configuration with advanced features
@@ -136,6 +162,14 @@ public:
         ColumnConfig(const std::string& h, float w = 0.0f) : header(h), width(w) {}
     };
 
+    /**
+     * @brief Sort spec for multi-column sorting (shared between threads)
+     */
+    struct SortSpec {
+        int columnIndex = -1;
+        int direction = ImGuiSortDirection_None; // ImGuiSortDirection_Ascending or _Descending
+    };
+
 private:
     // Double buffer for rows
     std::vector<Row> m_buffers[2];
@@ -150,15 +184,36 @@ private:
     // ImGui table state
     std::string m_tableId;
     ImGuiTableFlags m_tableFlags = ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY |
-                                   ImGuiTableFlags_Sortable | ImGuiTableFlags_Resizable | ImGuiTableFlags_Reorderable;
+                                   ImGuiTableFlags_Sortable | ImGuiTableFlags_Resizable | ImGuiTableFlags_Reorderable |
+                                   ImGuiTableFlags_Hideable | ImGuiTableFlags_SortMulti | ImGuiTableFlags_SortTristate;
 
     // Optional: Filter/search
     char m_filterBuffer[256] = "";
     bool m_filterEnabled = false;
 
-    // Sorting state (shared between GUI thread and background refresh thread)
-    std::atomic<int> m_lastSortColumn{-1};
-    std::atomic<int> m_lastSortDirection{ImGuiSortDirection_None};
+    // Multi-column sort state (shared between GUI and background thread)
+    static constexpr int kMaxSortSpecs = 4;
+    std::atomic<int> m_sortSpecCount{0};
+    SortSpec m_sortSpecs[kMaxSortSpecs]; // Written by GUI thread, read by background thread
+    std::atomic<bool> m_sortSpecsDirty{false}; // Signal that specs changed
+
+    // Frozen rows/columns
+    int m_frozenColumns = 0;
+    int m_frozenRows = 1; // 1 = freeze header row (default)
+
+    // Selection state
+    bool m_selectionEnabled = false;
+    ImGuiSelectionBasicStorage m_selection;
+
+    // Color callbacks
+    RowColorCallback m_rowColorCallback;
+    CellColorCallback m_cellColorCallback;
+
+    // Context menu
+    ContextMenuCallback m_contextMenuCallback;
+
+    // Scroll-to-row request (-1 = none)
+    int m_scrollToRow = -1;
 
     // Comparison function for sorting (can be customized)
     using RowComparator = std::function<bool(const Row&, const Row&, int column, bool ascending)>;
@@ -174,7 +229,7 @@ public:
      * @brief Add a column to the table
      *
      * @param header Column header text
-     * @param width Column width (0 = auto)
+     * @param width Column width (0 = auto). For stretch columns, this is a weight.
      * @param flags ImGui column flags (includes sorting, resizing options)
      * @param formatter Optional custom formatter function
      */
@@ -227,6 +282,73 @@ public:
     void EnableFilter(bool enable = true) { m_filterEnabled = enable; }
 
     /**
+     * @brief Enable row selection (single or multi)
+     */
+    void EnableSelection(bool enable = true) { m_selectionEnabled = enable; }
+
+    /**
+     * @brief Set frozen columns/rows for scroll freeze
+     * @param cols Number of leftmost columns to freeze (0 = none)
+     * @param rows Number of topmost rows to freeze (1 = header only, default)
+     */
+    void SetScrollFreeze(int cols, int rows) {
+        m_frozenColumns = cols;
+        m_frozenRows = rows;
+    }
+
+    /**
+     * @brief Set callback for per-row background color
+     * Return 0 for default color, or an ImU32 color value.
+     */
+    void SetRowColorCallback(RowColorCallback callback) { m_rowColorCallback = callback; }
+
+    /**
+     * @brief Set callback for per-cell background color
+     * Return 0 for default color, or an ImU32 color value.
+     */
+    void SetCellColorCallback(CellColorCallback callback) { m_cellColorCallback = callback; }
+
+    /**
+     * @brief Set right-click context menu callback for rows
+     */
+    void SetContextMenuCallback(ContextMenuCallback callback) { m_contextMenuCallback = callback; }
+
+    /**
+     * @brief Scroll to a specific row index on next Render()
+     */
+    void ScrollToRow(int rowIndex) { m_scrollToRow = rowIndex; }
+
+    /**
+     * @brief Get selection state (read-only access)
+     */
+    const ImGuiSelectionBasicStorage& GetSelection() const { return m_selection; }
+
+    /**
+     * @brief Get mutable selection state
+     */
+    ImGuiSelectionBasicStorage& GetSelection() { return m_selection; }
+
+    /**
+     * @brief Clear selection
+     */
+    void ClearSelection() { m_selection.Clear(); }
+
+    /**
+     * @brief Get selected row indices from current front buffer
+     */
+    std::vector<int> GetSelectedIndices() const {
+        std::vector<int> result;
+        void* it = nullptr;
+        ImGuiID id;
+        // const_cast needed because ImGui's GetNextSelectedItem isn't const
+        auto& sel = const_cast<ImGuiSelectionBasicStorage&>(m_selection);
+        while (sel.GetNextSelectedItem(&it, &id)) {
+            result.push_back(static_cast<int>(id));
+        }
+        return result;
+    }
+
+    /**
      * @brief Render the table (call every frame from GUI thread)
      *
      * This is LOCK-FREE - only reads the front buffer via atomic load.
@@ -264,8 +386,12 @@ public:
             }
         }
 
-        // Show row count
-        ImGui::Text("%zu rows", filteredIndices.size());
+        // Show row count (and selection count if enabled)
+        if (m_selectionEnabled && m_selection.Size > 0) {
+            ImGui::Text("%zu rows (%d selected)", filteredIndices.size(), m_selection.Size);
+        } else {
+            ImGui::Text("%zu rows", filteredIndices.size());
+        }
 
         // Render table
         if (ImGui::BeginTable(m_tableId.c_str(), m_columns.size(), m_tableFlags)) {
@@ -273,35 +399,98 @@ public:
             for (const auto& col : m_columns) {
                 ImGui::TableSetupColumn(col.header.c_str(), col.flags, col.width);
             }
+
+            // Freeze header row and optionally left columns
+            ImGui::TableSetupScrollFreeze(m_frozenColumns, m_frozenRows);
+
             ImGui::TableHeadersRow();
 
-            // Check for sorting changes
+            // Check for sorting changes (supports multi-column sort)
             if (ImGuiTableSortSpecs* sortSpecs = ImGui::TableGetSortSpecs()) {
-                if (sortSpecs->SpecsDirty && sortSpecs->SpecsCount > 0) {
-                    // Get first sort spec (support single-column sort for now)
-                    const ImGuiTableColumnSortSpecs& spec = sortSpecs->Specs[0];
-                    m_lastSortColumn.store(spec.ColumnIndex, std::memory_order_relaxed);
-                    m_lastSortDirection.store(spec.SortDirection, std::memory_order_release);
+                if (sortSpecs->SpecsDirty) {
+                    int count = std::min((int)sortSpecs->SpecsCount, kMaxSortSpecs);
+                    for (int i = 0; i < count; i++) {
+                        m_sortSpecs[i].columnIndex = sortSpecs->Specs[i].ColumnIndex;
+                        m_sortSpecs[i].direction = sortSpecs->Specs[i].SortDirection;
+                    }
+                    m_sortSpecCount.store(count, std::memory_order_relaxed);
+                    m_sortSpecsDirty.store(true, std::memory_order_release);
 
-                    // NOTE: We'll sort the back buffer during Refresh()
-                    // to maintain zero-lock rendering. Just mark it dirty here.
                     sortSpecs->SpecsDirty = false;
                 }
+            }
+
+            // Begin multi-select if enabled
+            ImGuiMultiSelectIO* msIO = nullptr;
+            if (m_selectionEnabled) {
+                ImGuiMultiSelectFlags msFlags = ImGuiMultiSelectFlags_ClearOnEscape |
+                                                ImGuiMultiSelectFlags_ClearOnClickVoid |
+                                                ImGuiMultiSelectFlags_BoxSelect1d;
+                msIO = ImGui::BeginMultiSelect(msFlags, m_selection.Size, (int)filteredIndices.size());
+                m_selection.ApplyRequests(msIO);
             }
 
             // Use ImGuiListClipper with correct filtered count
             ImGuiListClipper clipper;
             clipper.Begin(filteredIndices.size());
 
+            // Handle scroll-to-row request
+            if (m_scrollToRow >= 0 && m_scrollToRow < (int)filteredIndices.size()) {
+                clipper.IncludeItemsByIndex(m_scrollToRow, m_scrollToRow + 1);
+                ImGui::SetScrollY(m_scrollToRow * ImGui::GetTextLineHeightWithSpacing());
+                m_scrollToRow = -1;
+            }
+
             while (clipper.Step()) {
                 for (int idx = clipper.DisplayStart; idx < clipper.DisplayEnd; idx++) {
-                    const Row& rowData = rows[filteredIndices[idx]];
+                    int dataIdx = filteredIndices[idx];
+                    const Row& rowData = rows[dataIdx];
 
                     ImGui::TableNextRow();
+
+                    // Per-row background color
+                    if (m_rowColorCallback) {
+                        ImU32 rowColor = m_rowColorCallback(rowData, dataIdx);
+                        if (rowColor != 0) {
+                            ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg1, rowColor);
+                        }
+                    }
 
                     // Render cells
                     for (size_t col = 0; col < m_columns.size() && col < rowData.columns.size(); col++) {
                         ImGui::TableSetColumnIndex(col);
+
+                        // Per-cell background color
+                        if (m_cellColorCallback) {
+                            ImU32 cellColor = m_cellColorCallback(rowData, dataIdx, col);
+                            if (cellColor != 0) {
+                                ImGui::TableSetBgColor(ImGuiTableBgTarget_CellBg, cellColor);
+                            }
+                        }
+
+                        // Selection: render selectable in first column
+                        if (m_selectionEnabled && col == 0) {
+                            ImGui::SetNextItemSelectionUserData(idx);
+                            bool isSelected = m_selection.Contains((ImGuiID)idx);
+
+                            // Selectable spanning all columns for row selection
+                            char label[64];
+                            snprintf(label, sizeof(label), "##row%d", idx);
+                            ImGui::Selectable(label, isSelected,
+                                              ImGuiSelectableFlags_SpanAllColumns | ImGuiSelectableFlags_AllowOverlap);
+
+                            // Context menu on right-click
+                            if (m_contextMenuCallback) {
+                                char popupId[64];
+                                snprintf(popupId, sizeof(popupId), "ctx##%d", idx);
+                                if (ImGui::BeginPopupContextItem(popupId)) {
+                                    m_contextMenuCallback(rowData, dataIdx);
+                                    ImGui::EndPopup();
+                                }
+                            }
+
+                            ImGui::SameLine(0.0f, 0.0f);
+                        }
 
                         const auto& colCfg = m_columns[col];
                         bool rendered = false;
@@ -337,7 +526,23 @@ public:
                             ImGui::TextUnformatted(text.c_str());
                         }
                     }
+
+                    // Context menu for non-selection mode
+                    if (!m_selectionEnabled && m_contextMenuCallback) {
+                        char popupId[64];
+                        snprintf(popupId, sizeof(popupId), "ctx##%d", idx);
+                        if (ImGui::BeginPopupContextItem(popupId)) {
+                            m_contextMenuCallback(rowData, dataIdx);
+                            ImGui::EndPopup();
+                        }
+                    }
                 }
+            }
+
+            // End multi-select
+            if (m_selectionEnabled && msIO) {
+                msIO = ImGui::EndMultiSelect();
+                m_selection.ApplyRequests(msIO);
             }
 
             ImGui::EndTable();
@@ -371,55 +576,47 @@ public:
         // Execute refresh callback (this is where the DB query happens)
         m_refreshCallback(backBuffer);
 
-        // Apply sorting if requested (TYPED SORTING ONLY!)
-        // Load direction first (acquire) to synchronize with the release store in Render()
-        int sortDir = m_lastSortDirection.load(std::memory_order_acquire);
-        int sortColIdx = m_lastSortColumn.load(std::memory_order_relaxed);
-        if (sortColIdx >= 0 && sortColIdx < (int)m_columns.size()) {
-            bool ascending = (sortDir == ImGuiSortDirection_Ascending);
-            const auto& colCfg = m_columns[sortColIdx];
+        // Apply multi-column sorting if requested
+        int specCount = m_sortSpecCount.load(std::memory_order_acquire);
+        if (specCount > 0) {
+            // Snapshot the sort specs (they may be updated by GUI thread)
+            SortSpec specs[kMaxSortSpecs];
+            for (int i = 0; i < specCount; i++) {
+                specs[i] = m_sortSpecs[i];
+            }
 
-            // Typed extractor is REQUIRED for sorting
-            if (!colCfg.typedExtractor) {
-                // Column marked sortable but no typed extractor - log error
-                std::cerr << "ERROR: Column '" << colCfg.header
-                          << "' is sortable but has no typedExtractor. Skipping sort.\n";
-            } else {
-                std::sort(backBuffer.begin(), backBuffer.end(), [&colCfg, ascending](const Row& a, const Row& b) {
-                    // Extract typed values from userData
-                    std::any aVal = colCfg.typedExtractor(a);
-                    std::any bVal = colCfg.typedExtractor(b);
-
-                    if (!aVal.has_value() || !bVal.has_value()) {
-                        return false; // Can't compare empty values
+            // Validate all sort specs have typed extractors
+            bool canSort = true;
+            for (int i = 0; i < specCount; i++) {
+                int colIdx = specs[i].columnIndex;
+                if (colIdx < 0 || colIdx >= (int)m_columns.size() || !m_columns[colIdx].typedExtractor) {
+                    if (colIdx >= 0 && colIdx < (int)m_columns.size()) {
+                        std::cerr << "ERROR: Column '" << m_columns[colIdx].header
+                                  << "' is sortable but has no typedExtractor. Skipping sort.\n";
                     }
+                    canSort = false;
+                    break;
+                }
+            }
 
-                    // Type-safe comparison (try common types)
-                    if (auto* av = std::any_cast<int64_t>(&aVal)) {
-                        auto bv = std::any_cast<int64_t>(bVal);
-                        return ascending ? (*av < bv) : (*av > bv);
-                    } else if (auto* av = std::any_cast<int>(&aVal)) {
-                        auto bv = std::any_cast<int>(bVal);
-                        return ascending ? (*av < bv) : (*av > bv);
-                    } else if (auto* av = std::any_cast<double>(&aVal)) {
-                        auto bv = std::any_cast<double>(bVal);
-                        return ascending ? (*av < bv) : (*av > bv);
-                    } else if (auto* av = std::any_cast<bool>(&aVal)) {
-                        auto bv = std::any_cast<bool>(bVal);
-                        return ascending ? (*av < bv) : (*av > bv);
-                    } else if (auto* av = std::any_cast<std::string>(&aVal)) {
-                        auto bv = std::any_cast<std::string>(bVal);
-                        return ascending ? (*av < bv) : (*av > bv);
-                    } else if (auto* av = std::any_cast<std::string_view>(&aVal)) {
-                        auto bv = std::any_cast<std::string_view>(bVal);
-                        return ascending ? (*av < bv) : (*av > bv);
+            if (canSort) {
+                std::stable_sort(backBuffer.begin(), backBuffer.end(),
+                                 [this, &specs, specCount](const Row& a, const Row& b) {
+                    for (int s = 0; s < specCount; s++) {
+                        int colIdx = specs[s].columnIndex;
+                        bool ascending = (specs[s].direction == ImGuiSortDirection_Ascending);
+                        const auto& colCfg = m_columns[colIdx];
+
+                        int cmp = CompareTypedValues(colCfg.typedExtractor(a), colCfg.typedExtractor(b));
+                        if (cmp != 0) {
+                            return ascending ? (cmp < 0) : (cmp > 0);
+                        }
                     }
-
-                    // Unknown type - can't sort
-                    std::cerr << "WARNING: Unknown type in typedExtractor, cannot sort.\n";
-                    return false;
+                    return false; // Equal across all sort specs
                 });
             }
+
+            m_sortSpecsDirty.store(false, std::memory_order_relaxed);
         }
 
         // Atomic swap (release semantics - ensures all writes are visible)
@@ -488,6 +685,34 @@ public:
         }
     }
 
+    void EnableHorizontalScroll(bool enable = true) {
+        if (enable) {
+            m_tableFlags |= ImGuiTableFlags_ScrollX;
+        } else {
+            m_tableFlags &= ~ImGuiTableFlags_ScrollX;
+        }
+    }
+
+    void EnableColumnHiding(bool enable = true) {
+        if (enable) {
+            m_tableFlags |= ImGuiTableFlags_Hideable;
+        } else {
+            m_tableFlags &= ~ImGuiTableFlags_Hideable;
+        }
+    }
+
+    /**
+     * @brief Set column sizing policy
+     * @param policy One of: ImGuiTableFlags_SizingFixedFit, SizingFixedSame,
+     *               SizingStretchProp, SizingStretchSame
+     */
+    void SetSizingPolicy(ImGuiTableFlags policy) {
+        // Clear existing sizing bits
+        m_tableFlags &= ~(ImGuiTableFlags_SizingFixedFit | ImGuiTableFlags_SizingFixedSame |
+                          ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_SizingStretchSame);
+        m_tableFlags |= policy;
+    }
+
     /**
      * @brief Set icon texture for a specific column
      * @param colIndex Column index
@@ -522,19 +747,113 @@ public:
     }
 
     /**
-     * @brief Get current sort state
+     * @brief Get current sort state (primary sort column)
      */
-    int GetSortColumn() const { return m_lastSortColumn.load(std::memory_order_acquire); }
+    int GetSortColumn() const {
+        int count = m_sortSpecCount.load(std::memory_order_acquire);
+        return count > 0 ? m_sortSpecs[0].columnIndex : -1;
+    }
+
     ImGuiSortDirection GetSortDirection() const {
-        return static_cast<ImGuiSortDirection>(m_lastSortDirection.load(std::memory_order_acquire));
+        int count = m_sortSpecCount.load(std::memory_order_acquire);
+        return count > 0 ? static_cast<ImGuiSortDirection>(m_sortSpecs[0].direction) : ImGuiSortDirection_None;
+    }
+
+    /**
+     * @brief Get full multi-column sort state
+     */
+    int GetSortSpecCount() const { return m_sortSpecCount.load(std::memory_order_acquire); }
+
+    SortSpec GetSortSpec(int index) const {
+        if (index >= 0 && index < m_sortSpecCount.load(std::memory_order_acquire)) {
+            return m_sortSpecs[index];
+        }
+        return {};
     }
 
     /**
      * @brief Programmatically set sort (will apply on next Refresh)
      */
     void SetSort(int column, ImGuiSortDirection direction) {
-        m_lastSortColumn.store(column, std::memory_order_relaxed);
-        m_lastSortDirection.store(direction, std::memory_order_release);
+        m_sortSpecs[0].columnIndex = column;
+        m_sortSpecs[0].direction = direction;
+        m_sortSpecCount.store(1, std::memory_order_relaxed);
+        m_sortSpecsDirty.store(true, std::memory_order_release);
+    }
+
+    /**
+     * @brief Copy selected rows to clipboard as tab-separated text
+     */
+    void CopySelectionToClipboard() const {
+        if (!m_selectionEnabled || m_selection.Size == 0) return;
+
+        int frontIdx = m_frontIndex.load(std::memory_order_acquire);
+        const std::vector<Row>& rows = m_buffers[frontIdx];
+
+        std::string text;
+
+        // Header row
+        for (size_t c = 0; c < m_columns.size(); c++) {
+            if (c > 0) text += '\t';
+            text += m_columns[c].header;
+        }
+        text += '\n';
+
+        // Data rows
+        void* it = nullptr;
+        ImGuiID id;
+        auto& sel = const_cast<ImGuiSelectionBasicStorage&>(m_selection);
+        while (sel.GetNextSelectedItem(&it, &id)) {
+            int idx = static_cast<int>(id);
+            if (idx >= 0 && idx < (int)rows.size()) {
+                for (size_t c = 0; c < rows[idx].columns.size(); c++) {
+                    if (c > 0) text += '\t';
+                    text += rows[idx].columns[c];
+                }
+                text += '\n';
+            }
+        }
+
+        ImGui::SetClipboardText(text.c_str());
+    }
+
+private:
+    /**
+     * @brief Compare two std::any values, returns -1, 0, or 1
+     */
+    static int CompareTypedValues(const std::any& aVal, const std::any& bVal) {
+        if (!aVal.has_value() || !bVal.has_value()) {
+            return 0;
+        }
+
+        // Try common types in order of likelihood
+        if (auto* av = std::any_cast<int64_t>(&aVal)) {
+            auto bv = std::any_cast<int64_t>(bVal);
+            return (*av < bv) ? -1 : (*av > bv) ? 1 : 0;
+        }
+        if (auto* av = std::any_cast<int>(&aVal)) {
+            auto bv = std::any_cast<int>(bVal);
+            return (*av < bv) ? -1 : (*av > bv) ? 1 : 0;
+        }
+        if (auto* av = std::any_cast<double>(&aVal)) {
+            auto bv = std::any_cast<double>(bVal);
+            return (*av < bv) ? -1 : (*av > bv) ? 1 : 0;
+        }
+        if (auto* av = std::any_cast<bool>(&aVal)) {
+            auto bv = std::any_cast<bool>(bVal);
+            return (*av < bv) ? -1 : (*av > bv) ? 1 : 0;
+        }
+        if (auto* av = std::any_cast<std::string>(&aVal)) {
+            auto& bv = std::any_cast<const std::string&>(bVal);
+            return av->compare(bv);
+        }
+        if (auto* av = std::any_cast<std::string_view>(&aVal)) {
+            auto bv = std::any_cast<std::string_view>(bVal);
+            return av->compare(bv);
+        }
+
+        std::cerr << "WARNING: Unknown type in typedExtractor, cannot sort.\n";
+        return 0;
     }
 };
 

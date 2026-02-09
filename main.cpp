@@ -354,6 +354,7 @@ int main(int, char**) {
     g_asyncTable->AddColumn("Name", 200.0f);
     g_asyncTable->AddColumn("Has Fun", 100.0f);
     g_asyncTable->EnableFilter(true);
+    g_asyncTable->EnableSelection(true);
 
     // Set refresh callback (Uses sqlpp23 directly with type erasure!)
     // Define a simple struct to hold typed data
@@ -394,6 +395,17 @@ int main(int, char**) {
         try {
             auto& data = std::any_cast<const FooTypedData&>(row.userData);
             return std::any(data.id);
+        } catch (...) {
+            return {};
+        }
+    });
+
+    // Extract string for Name column (enables multi-column sort)
+    g_asyncTable->SetColumnTypedExtractor(1, [](const db::AsyncTableWidget::Row& row) -> std::any {
+        if (!row.userData.has_value()) return {};
+        try {
+            auto& data = std::any_cast<const FooTypedData&>(row.userData);
+            return std::any(data.name);
         } catch (...) {
             return {};
         }
