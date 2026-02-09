@@ -7,7 +7,8 @@
 #include <vector>
 #include <string>
 #include <cmath>
-#include <random>
+#include <faker-cxx/person.h>
+#include <faker-cxx/number.h>
 #include <sstream>
 #include <iomanip>
 #include <reaction/reaction.h>
@@ -173,12 +174,13 @@ void Gui() {
 
                 if (ImGui::Button("Insert Random Row")) {
                     static int next_id = 100; // Start higher to avoid collision with seed
-                    auto name = "User " + std::to_string(next_id);
+                    auto name = std::string(faker::person::fullName());
+                    bool hasFun = faker::number::integer(0, 1) == 1;
                     try {
                         DatabaseManager::Get().GetConnection()(sqlpp::insert_into(test_db::foo)
                                                                    .set(test_db::foo.Id = next_id++,
                                                                         test_db::foo.Name = name,
-                                                                        test_db::foo.HasFun = true));
+                                                                        test_db::foo.HasFun = hasFun));
                         lastError.clear();
                     } catch (const std::exception& e) {
                         lastError = e.what();
@@ -302,10 +304,9 @@ void Gui() {
                 ImGui::Separator();
 
                 if (ImGui::Button("Add Random Element")) {
-                    static std::mt19937 rng{std::random_device{}()};
-                    std::uniform_real_distribution<double> priceDist(1.0, 500.0);
-                    std::uniform_int_distribution<long> qtyDist(1, 1000);
-                    g_reactiveCollection->push_back(priceDist(rng), qtyDist(rng));
+                    double price = faker::number::decimal(1.0, 500.0);
+                    long qty = faker::number::integer(1L, 1000L);
+                    g_reactiveCollection->push_back(price, qty);
                     g_reactiveRefreshCV.notify_one();
                 }
                 ImGui::SameLine();
@@ -388,10 +389,13 @@ int main(int, char**) {
     try {
         g_dbManager.GetConnection()("CREATE TABLE IF NOT EXISTS foo (id BIGINT, name TEXT, has_fun BOOLEAN)");
 
-        // Seed initial data using sqlpp23
-        g_dbManager.GetConnection()(
-            sqlpp::insert_into(test_db::foo)
-                .set(test_db::foo.Id = 1, test_db::foo.Name = "Initial User", test_db::foo.HasFun = true));
+        // Seed initial data using sqlpp23 + faker
+        for (int i = 1; i <= 5; i++) {
+            auto name = std::string(faker::person::fullName());
+            bool hasFun = faker::number::integer(0, 1) == 1;
+            g_dbManager.GetConnection()(sqlpp::insert_into(test_db::foo)
+                .set(test_db::foo.Id = i, test_db::foo.Name = name, test_db::foo.HasFun = hasFun));
+        }
     } catch (const std::exception& e) {
         // Handle error - will show in UI
     }
@@ -491,9 +495,11 @@ int main(int, char**) {
 #ifndef __EMSCRIPTEN__
     // Setup Reactive List Widget (TBB-backed collection)
     g_reactiveCollection = new DemoCollection();
-    g_reactiveCollection->push_back(10.5, 100L);
-    g_reactiveCollection->push_back(25.0, 200L);
-    g_reactiveCollection->push_back(7.75, 50L);
+    for (int i = 0; i < 5; i++) {
+        double price = faker::number::decimal(1.0, 500.0);
+        long qty = faker::number::integer(1L, 1000L);
+        g_reactiveCollection->push_back(price, qty);
+    }
 
     g_reactiveList = new db::ReactiveListWidget<DemoCollection>();
     g_reactiveList->SetColumnHeaders("ID", "Price", "Quantity");

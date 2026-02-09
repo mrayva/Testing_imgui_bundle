@@ -132,6 +132,10 @@ if (NOT EMSCRIPTEN)
     target_link_libraries(${PROJECT_NAME} PRIVATE TBB::tbb)
 endif()
 
+# Link against faker-cxx for realistic sample data
+find_package(faker-cxx CONFIG REQUIRED)
+target_link_libraries(${PROJECT_NAME} PRIVATE faker-cxx::faker-cxx)
+
 # Link against sqlpp23 and its sqlite3 connector
 # sqlpp23::sqlite3 requires sqlite3 to be found
 find_package(SQLite3 REQUIRED)
