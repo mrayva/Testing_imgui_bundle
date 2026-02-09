@@ -126,6 +126,12 @@ target_link_libraries(${PROJECT_NAME} PRIVATE plutosvg::plutosvg plutovg::plutov
 find_package(reaction CONFIG REQUIRED)
 target_link_libraries(${PROJECT_NAME} PRIVATE reaction::reaction)
 
+# Link against TBB (desktop only - no WASM support)
+if (NOT EMSCRIPTEN)
+    find_package(TBB CONFIG REQUIRED)
+    target_link_libraries(${PROJECT_NAME} PRIVATE TBB::tbb)
+endif()
+
 # Link against sqlpp23 and its sqlite3 connector
 # sqlpp23::sqlite3 requires sqlite3 to be found
 find_package(SQLite3 REQUIRED)

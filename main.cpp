@@ -7,6 +7,9 @@
 #include <vector>
 #include <string>
 #include <cmath>
+#include <random>
+#include <sstream>
+#include <iomanip>
 #include <reaction/reaction.h>
 #include <filesystem>
 #include <thread>
@@ -18,6 +21,11 @@
 #include "database/schemas/table_foo.h"
 #include "database/async_table_widget.h"
 #include "nats_client.h"
+
+#ifndef __EMSCRIPTEN__
+#include "database/reactive_two_field_collection.h"
+#include "database/reactive_list_widget.h"
+#endif
 
 namespace ed = ax::NodeEditor;
 
@@ -40,6 +48,17 @@ static char g_natsUrl[256] = "wss://demo.nats.io:8443";
 static char g_natsSubject[256] = "imgui.demo";
 static char g_natsMessage[256] = "Hello from ImGui!";
 static std::vector<std::string> g_natsLog;
+
+#ifndef __EMSCRIPTEN__
+// Reactive List Widget (TBB-backed, desktop only)
+using DemoCollection = reactive::ReactiveTwoFieldCollection<double, long>;
+static DemoCollection* g_reactiveCollection = nullptr;
+static db::ReactiveListWidget<DemoCollection>* g_reactiveList = nullptr;
+static std::thread g_reactiveRefreshThread;
+static std::atomic<bool> g_reactiveRefreshRunning{false};
+static std::mutex g_reactiveRefreshMutex;
+static std::condition_variable g_reactiveRefreshCV;
+#endif
 
 void Gui() {
     auto& io = ImGui::GetIO();
@@ -272,6 +291,35 @@ void Gui() {
         }
 
 
+#ifndef __EMSCRIPTEN__
+        // Reactive List Widget Demo
+        if (ImGui::CollapsingHeader("Reactive List Widget (TBB + Typed Columns)")) {
+            if (g_reactiveList && g_reactiveCollection) {
+                ImGui::TextColored(ImVec4(0, 1, 0, 1), "Compile-time typed columns (no std::any)");
+                ImGui::Text("Collection size: %zu", g_reactiveCollection->size());
+                ImGui::Text("Total1 (sum of elem2): %ld", g_reactiveCollection->total1());
+                ImGui::Text("Total2 (sum of elem1*elem2): %.2f", g_reactiveCollection->total2());
+                ImGui::Separator();
+
+                if (ImGui::Button("Add Random Element")) {
+                    static std::mt19937 rng{std::random_device{}()};
+                    std::uniform_real_distribution<double> priceDist(1.0, 500.0);
+                    std::uniform_int_distribution<long> qtyDist(1, 1000);
+                    g_reactiveCollection->push_back(priceDist(rng), qtyDist(rng));
+                    g_reactiveRefreshCV.notify_one();
+                }
+                ImGui::SameLine();
+                if (ImGui::Button("Refresh Now")) {
+                    g_reactiveRefreshCV.notify_one();
+                }
+
+                g_reactiveList->Render();
+            } else {
+                ImGui::TextColored(ImVec4(1, 0, 0, 1), "Reactive list not initialized");
+            }
+        }
+#endif
+
         // NATS Demo
         if (ImGui::CollapsingHeader("NATS Messaging Example")) {
             ImGui::InputText("NATS URL", g_natsUrl, sizeof(g_natsUrl));
@@ -440,6 +488,43 @@ int main(int, char**) {
         }
     });
 
+#ifndef __EMSCRIPTEN__
+    // Setup Reactive List Widget (TBB-backed collection)
+    g_reactiveCollection = new DemoCollection();
+    g_reactiveCollection->push_back(10.5, 100L);
+    g_reactiveCollection->push_back(25.0, 200L);
+    g_reactiveCollection->push_back(7.75, 50L);
+
+    g_reactiveList = new db::ReactiveListWidget<DemoCollection>();
+    g_reactiveList->SetColumnHeaders("ID", "Price", "Quantity");
+    g_reactiveList->SetColumnWidths(60.0f, 120.0f, 120.0f);
+    g_reactiveList->EnableFilter(true);
+    g_reactiveList->EnableSelection(true);
+    g_reactiveList->SetElem1Formatter([](double v) {
+        std::ostringstream oss;
+        oss << std::fixed << std::setprecision(2) << v;
+        return oss.str();
+    });
+
+    // Initial snapshot
+    g_reactiveList->Refresh(*g_reactiveCollection);
+
+    // Background refresh thread (1-second interval)
+    g_reactiveRefreshRunning = true;
+    g_reactiveRefreshThread = std::thread([]() {
+        while (g_reactiveRefreshRunning) {
+            {
+                std::unique_lock<std::mutex> lock(g_reactiveRefreshMutex);
+                g_reactiveRefreshCV.wait_for(lock, std::chrono::seconds(1));
+            }
+            if (!g_reactiveRefreshRunning) break;
+            if (g_reactiveList && g_reactiveCollection) {
+                g_reactiveList->Refresh(*g_reactiveCollection);
+            }
+        }
+    });
+#endif
+
     // ImmApp handles the setup of HelloImGui, ImGui, Implot, etc.
     HelloImGui::RunnerParams runnerParams;
     runnerParams.callbacks.ShowGui = Gui;
@@ -513,7 +598,7 @@ int main(int, char**) {
 
     ImmApp::Run(runnerParams, addOnsParams);
 
-    // Shutdown: stop background thread and clean up
+    // Shutdown: stop background threads and clean up
     g_refreshRunning = false;
     g_refreshCV.notify_one();
     if (g_refreshThread.joinable()) {
@@ -521,6 +606,18 @@ int main(int, char**) {
     }
     delete g_asyncTable;
     g_asyncTable = nullptr;
+
+#ifndef __EMSCRIPTEN__
+    g_reactiveRefreshRunning = false;
+    g_reactiveRefreshCV.notify_one();
+    if (g_reactiveRefreshThread.joinable()) {
+        g_reactiveRefreshThread.join();
+    }
+    delete g_reactiveList;
+    g_reactiveList = nullptr;
+    delete g_reactiveCollection;
+    g_reactiveCollection = nullptr;
+#endif
 
     return 0;
 }
