@@ -504,7 +504,8 @@ private:
     ImGuiTableFlags m_tableFlags = ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY |
                                    ImGuiTableFlags_Sortable | ImGuiTableFlags_Resizable |
                                    ImGuiTableFlags_Reorderable | ImGuiTableFlags_Hideable |
-                                   ImGuiTableFlags_SortMulti | ImGuiTableFlags_SortTristate;
+                                   ImGuiTableFlags_SortMulti | ImGuiTableFlags_SortTristate |
+                                   ImGuiTableFlags_SizingFixedFit;
 
     // Filter
     char m_filterBuf[256] = "";
