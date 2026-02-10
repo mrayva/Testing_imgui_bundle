@@ -41,6 +41,9 @@ static std::atomic<bool> g_refreshRunning{false};
 static std::mutex g_refreshMutex;
 static std::condition_variable g_refreshCV;
 
+// Shared next_id for inserting rows into foo table
+static int g_nextFooId = 100;
+
 // NATS State
 static NatsClient g_natsClient;
 static char g_natsUrl[256] = "wss://demo.nats.io:8443";
@@ -153,6 +156,65 @@ void Gui() {
                     g_refreshCV.notify_one();
                 }
 
+                ImGui::Separator();
+
+                // Bulk insert controls
+                static int insertCount = 1;
+                ImGui::SetNextItemWidth(120.0f);
+                ImGui::InputInt("Rows to add", &insertCount);
+                if (insertCount < 1) insertCount = 1;
+                if (insertCount > 10000) insertCount = 10000;
+                ImGui::SameLine();
+                if (ImGui::Button("Add Rows")) {
+                    try {
+                        for (int i = 0; i < insertCount; i++) {
+                            auto name = std::string(faker::person::fullName());
+                            bool hasFun = faker::number::integer(0, 1) == 1;
+                            DatabaseManager::Get().GetConnection()(sqlpp::insert_into(test_db::foo)
+                                .set(test_db::foo.Id = g_nextFooId++,
+                                     test_db::foo.Name = name,
+                                     test_db::foo.HasFun = hasFun));
+                        }
+                    } catch (...) {}
+                    g_refreshCV.notify_one();
+                }
+
+                // Update every Nth row controls
+                static int updateModN = 1;
+                static int updateStartRow = 0;
+                ImGui::SetNextItemWidth(120.0f);
+                ImGui::InputInt("Update mod N", &updateModN);
+                if (updateModN < 1) updateModN = 1;
+                if (updateModN > 10000) updateModN = 10000;
+                ImGui::SameLine();
+                ImGui::SetNextItemWidth(120.0f);
+                ImGui::InputInt("Start row", &updateStartRow);
+                if (updateStartRow < 0) updateStartRow = 0;
+                if (updateStartRow > 10000) updateStartRow = 10000;
+                ImGui::SameLine();
+                if (ImGui::Button("Update Rows")) {
+                    try {
+                        auto& conn = DatabaseManager::Get().GetConnection();
+                        // Select all IDs
+                        std::vector<int64_t> ids;
+                        for (const auto& row : conn(sqlpp::select(test_db::foo.Id).from(test_db::foo))) {
+                            ids.push_back(row.Id);
+                        }
+                        // Update every Nth row starting from startRow index
+                        for (int i = updateStartRow; i < static_cast<int>(ids.size()); i += updateModN) {
+                            auto id = ids[i];
+                            auto name = std::string(faker::person::fullName());
+                            bool hasFun = faker::number::integer(0, 1) == 1;
+                            conn(sqlpp::update(test_db::foo)
+                                .set(test_db::foo.Name = name, test_db::foo.HasFun = hasFun)
+                                .where(test_db::foo.Id == id));
+                        }
+                    } catch (...) {}
+                    g_refreshCV.notify_one();
+                }
+
+                ImGui::Separator();
+
                 // Render the table (zero locks!)
                 g_asyncTable->Render();
 
@@ -169,12 +231,11 @@ void Gui() {
                 static std::string lastError;
 
                 if (ImGui::Button("Insert Random Row")) {
-                    static int next_id = 100; // Start higher to avoid collision with seed
                     auto name = std::string(faker::person::fullName());
                     bool hasFun = faker::number::integer(0, 1) == 1;
                     try {
                         DatabaseManager::Get().GetConnection()(sqlpp::insert_into(test_db::foo)
-                                                                   .set(test_db::foo.Id = next_id++,
+                                                                   .set(test_db::foo.Id = g_nextFooId++,
                                                                         test_db::foo.Name = name,
                                                                         test_db::foo.HasFun = hasFun));
                         lastError.clear();
