@@ -126,11 +126,9 @@ target_link_libraries(${PROJECT_NAME} PRIVATE plutosvg::plutosvg plutovg::plutov
 find_package(reaction CONFIG REQUIRED)
 target_link_libraries(${PROJECT_NAME} PRIVATE reaction::reaction)
 
-# Link against TBB (desktop only - no WASM support)
-if (NOT EMSCRIPTEN)
-    find_package(TBB CONFIG REQUIRED)
-    target_link_libraries(${PROJECT_NAME} PRIVATE TBB::tbb)
-endif()
+# parallel-hashmap (header-only, works on all platforms including WASM)
+find_path(PHMAP_INCLUDE_DIR "parallel_hashmap/phmap.h" REQUIRED)
+target_include_directories(${PROJECT_NAME} PRIVATE ${PHMAP_INCLUDE_DIR})
 
 # Link against faker-cxx for realistic sample data
 find_package(faker-cxx CONFIG REQUIRED)

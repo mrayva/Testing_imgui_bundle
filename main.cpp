@@ -23,10 +23,8 @@
 #include "database/async_table_widget.h"
 #include "nats_client.h"
 
-#ifndef __EMSCRIPTEN__
 #include "database/reactive_two_field_collection.h"
 #include "database/reactive_list_widget.h"
-#endif
 
 namespace ed = ax::NodeEditor;
 
@@ -50,8 +48,7 @@ static char g_natsSubject[256] = "imgui.demo";
 static char g_natsMessage[256] = "Hello from ImGui!";
 static std::vector<std::string> g_natsLog;
 
-#ifndef __EMSCRIPTEN__
-// Reactive List Widget (TBB-backed, desktop only)
+// Reactive List Widget (phmap-backed, all platforms)
 using DemoCollection = reactive::ReactiveTwoFieldCollection<double, long>;
 static DemoCollection* g_reactiveCollection = nullptr;
 static db::ReactiveListWidget<DemoCollection>* g_reactiveList = nullptr;
@@ -59,7 +56,6 @@ static std::thread g_reactiveRefreshThread;
 static std::atomic<bool> g_reactiveRefreshRunning{false};
 static std::mutex g_reactiveRefreshMutex;
 static std::condition_variable g_reactiveRefreshCV;
-#endif
 
 void Gui() {
     auto& io = ImGui::GetIO();
@@ -293,9 +289,8 @@ void Gui() {
         }
 
 
-#ifndef __EMSCRIPTEN__
         // Reactive List Widget Demo
-        if (ImGui::CollapsingHeader("Reactive List Widget (TBB + Typed Columns)")) {
+        if (ImGui::CollapsingHeader("Reactive List Widget (Typed Columns)")) {
             if (g_reactiveList && g_reactiveCollection) {
                 ImGui::TextColored(ImVec4(0, 1, 0, 1), "Compile-time typed columns (no std::any)");
                 ImGui::Text("Collection size: %zu", g_reactiveCollection->size());
@@ -319,7 +314,6 @@ void Gui() {
                 ImGui::TextColored(ImVec4(1, 0, 0, 1), "Reactive list not initialized");
             }
         }
-#endif
 
         // NATS Demo
         if (ImGui::CollapsingHeader("NATS Messaging Example")) {
@@ -492,8 +486,7 @@ int main(int, char**) {
         }
     });
 
-#ifndef __EMSCRIPTEN__
-    // Setup Reactive List Widget (TBB-backed collection)
+    // Setup Reactive List Widget (phmap-backed collection)
     g_reactiveCollection = new DemoCollection();
     for (int i = 0; i < 5; i++) {
         double price = faker::number::decimal(1.0, 500.0);
@@ -529,7 +522,6 @@ int main(int, char**) {
             }
         }
     });
-#endif
 
     // ImmApp handles the setup of HelloImGui, ImGui, Implot, etc.
     HelloImGui::RunnerParams runnerParams;
@@ -613,7 +605,6 @@ int main(int, char**) {
     delete g_asyncTable;
     g_asyncTable = nullptr;
 
-#ifndef __EMSCRIPTEN__
     g_reactiveRefreshRunning = false;
     g_reactiveRefreshCV.notify_one();
     if (g_reactiveRefreshThread.joinable()) {
@@ -623,7 +614,6 @@ int main(int, char**) {
     g_reactiveList = nullptr;
     delete g_reactiveCollection;
     g_reactiveCollection = nullptr;
-#endif
 
     return 0;
 }

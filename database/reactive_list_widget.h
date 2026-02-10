@@ -173,7 +173,7 @@ public:
 
         backRows.clear();
 
-        // Iterate collection — TBB concurrent_hash_map iterators are safe during concurrent inserts
+        // Iterate collection — phmap parallel_node_hash_map iterators are safe during concurrent inserts
         for (auto it = collection.begin(); it != collection.end(); ++it) {
             SnapshotRow row;
             row.id    = it->first;

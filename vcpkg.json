@@ -18,10 +18,7 @@
             "name": "cnats",
             "platform": "!emscripten"
         },
-        {
-            "name": "tbb",
-            "platform": "!emscripten"
-        },
+        "parallel-hashmap",
         "faker-cxx"
     ],
     "builtin-baseline": "4f326c4072038c8624c36a8ba5ed23f616adda53"
