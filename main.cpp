@@ -370,6 +370,55 @@ void Gui() {
                     g_reactiveRefreshCV.notify_one();
                 }
 
+                ImGui::Separator();
+
+                // Bulk insert controls
+                static int rlInsertCount = 1;
+                ImGui::SetNextItemWidth(120.0f);
+                ImGui::InputInt("Elements to add", &rlInsertCount);
+                if (rlInsertCount < 1) rlInsertCount = 1;
+                if (rlInsertCount > 10000) rlInsertCount = 10000;
+                ImGui::SameLine();
+                if (ImGui::Button("Add Elements")) {
+                    for (int i = 0; i < rlInsertCount; i++) {
+                        double price = faker::number::decimal(1.0, 500.0);
+                        long qty = faker::number::integer(1L, 1000L);
+                        g_reactiveCollection->push_back(price, qty);
+                    }
+                    g_reactiveRefreshCV.notify_one();
+                }
+
+                // Update every Nth element controls
+                static int rlUpdateModN = 1;
+                static int rlUpdateStartRow = 0;
+                ImGui::SetNextItemWidth(120.0f);
+                ImGui::InputInt("Update mod N##rl", &rlUpdateModN);
+                if (rlUpdateModN < 1) rlUpdateModN = 1;
+                if (rlUpdateModN > 10000) rlUpdateModN = 10000;
+                ImGui::SameLine();
+                ImGui::SetNextItemWidth(120.0f);
+                ImGui::InputInt("Start row##rl", &rlUpdateStartRow);
+                if (rlUpdateStartRow < 0) rlUpdateStartRow = 0;
+                if (rlUpdateStartRow > 10000) rlUpdateStartRow = 10000;
+                ImGui::SameLine();
+                if (ImGui::Button("Update Elements")) {
+                    // Collect all IDs
+                    std::vector<std::size_t> ids;
+                    for (auto it = g_reactiveCollection->begin(); it != g_reactiveCollection->end(); ++it) {
+                        ids.push_back(it->first);
+                    }
+                    // Update every Nth element starting from startRow index
+                    for (int i = rlUpdateStartRow; i < static_cast<int>(ids.size()); i += rlUpdateModN) {
+                        double price = faker::number::decimal(1.0, 500.0);
+                        long qty = faker::number::integer(1L, 1000L);
+                        g_reactiveCollection->elem1Var(ids[i]).value(price);
+                        g_reactiveCollection->elem2Var(ids[i]).value(qty);
+                    }
+                    g_reactiveRefreshCV.notify_one();
+                }
+
+                ImGui::Separator();
+
                 g_reactiveList->Render();
             } else {
                 ImGui::TextColored(ImVec4(1, 0, 0, 1), "Reactive list not initialized");
