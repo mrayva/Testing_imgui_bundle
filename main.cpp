@@ -66,10 +66,7 @@ void Gui() {
         ImGui::PushFont(io.Fonts->Fonts[g_GlobalFontIdx]);
     }
 
-    // Basic ImGui Demo
-    if (ImGui::Begin("Kitchen Sink Demo")) {
-
-        ImGui::Text("Welcome to the ImGui Bundle Kitchen Sink!");
+    ImGui::Text("Welcome to the ImGui Bundle Kitchen Sink!");
         ImGui::Separator();
 
         static float f = 0.0f;
@@ -475,9 +472,6 @@ void Gui() {
 
             if (ImGui::Button("Clear Log")) g_natsLog.clear();
         }
-    }
-    ImGui::End();
-
     if (g_GlobalFontIdx < ImGui::GetIO().Fonts->Fonts.Size) {
         ImGui::PopFont();
     }
@@ -637,8 +631,10 @@ int main(int, char**) {
     HelloImGui::RunnerParams runnerParams;
     runnerParams.callbacks.ShowGui = Gui;
     runnerParams.appWindowParams.windowTitle = "ImGui Bundle Kitchen Sink";
+    runnerParams.appWindowParams.windowGeometry.windowSizeState =
+        HelloImGui::WindowSizeState::Maximized;
     runnerParams.imGuiWindowParams.defaultImGuiWindowType =
-        HelloImGui::DefaultImGuiWindowType::ProvideFullScreenDockSpace;
+        HelloImGui::DefaultImGuiWindowType::ProvideFullScreenWindow;
 
     // Load professional system fonts
     runnerParams.callbacks.LoadAdditionalFonts = []() {
