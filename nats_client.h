@@ -6,6 +6,7 @@
 #include <mutex>
 #include <atomic>
 #include <queue>
+#include <thread>
 
 struct NatsMessage {
     std::string subject;
@@ -36,11 +37,13 @@ public:
 
 private:
     std::atomic<bool> m_connected{false};
+    std::atomic<bool> m_stopRequested{false};
 
     mutable std::mutex m_stateMutex;
     std::string m_lastError;
     std::string m_status = "Disconnected";
     void* m_nativeData = nullptr;
+    std::thread m_connectThread;
 
     std::mutex m_messageMutex;
     std::queue<NatsMessage> m_incomingMessages;

@@ -3,6 +3,7 @@
 #include <nats/nats.h>
 #include <iostream>
 #include <thread>
+#include <memory>
 
 struct NativeData {
     natsConnection* conn = nullptr;
@@ -32,15 +33,26 @@ NatsClient::~NatsClient() {
 }
 
 bool NatsClient::Connect(const std::string& url) {
+    if (url.empty()) {
+        std::lock_guard<std::mutex> lock(m_stateMutex);
+        m_status = "Failed";
+        m_lastError = "NATS URL cannot be empty";
+        m_connected.store(false, std::memory_order_release);
+        return false;
+    }
+
+    // Ensure prior connection attempt is fully stopped and joined before starting a new one.
+    Disconnect();
+
     {
         std::lock_guard<std::mutex> lock(m_stateMutex);
-        if (m_status == "Connecting...") return false;
         m_status = "Connecting...";
         m_lastError = "";
     }
+    m_stopRequested.store(false, std::memory_order_release);
 
     std::string urlCopy = url;
-    std::thread([this, urlCopy]() {
+    m_connectThread = std::thread([this, urlCopy]() {
         natsOptions* opts = nullptr;
         natsOptions_Create(&opts);
         natsOptions_SetURL(opts, urlCopy.c_str());
@@ -50,25 +62,45 @@ bool NatsClient::Connect(const std::string& url) {
         natsStatus s = natsConnection_Connect(&conn, opts);
         natsOptions_Destroy(opts);
 
+        if (m_stopRequested.load(std::memory_order_acquire)) {
+            if (conn) {
+                natsConnection_Close(conn);
+                natsConnection_Destroy(conn);
+            }
+            return;
+        }
+
         if (s == NATS_OK) {
-            NativeData* nd = new NativeData();
+            auto nd = std::make_unique<NativeData>();
             nd->conn = conn;
             {
                 std::lock_guard<std::mutex> lock(m_stateMutex);
-                m_nativeData = nd;
-                m_status = "Connected";
+                if (m_stopRequested.load(std::memory_order_acquire)) {
+                    // Disconnect won during connect setup; drop this connection.
+                    if (nd->conn) {
+                        natsConnection_Close(nd->conn);
+                        natsConnection_Destroy(nd->conn);
+                    }
+                } else {
+                    m_nativeData = nd.release();
+                    m_status = "Connected";
+                    m_connected.store(true, std::memory_order_release);
+                }
             }
-            m_connected.store(true, std::memory_order_release);
         } else {
             {
                 std::lock_guard<std::mutex> lock(m_stateMutex);
-                m_status = "Failed";
-                m_lastError = natsStatus_GetText(s);
+                if (!m_stopRequested.load(std::memory_order_acquire)) {
+                    m_status = "Failed";
+                    m_lastError = natsStatus_GetText(s);
+                }
             }
-            m_connected.store(false, std::memory_order_release);
-            std::cerr << "NATS connection failed: " << natsStatus_GetText(s) << std::endl;
+            if (!m_stopRequested.load(std::memory_order_acquire)) {
+                m_connected.store(false, std::memory_order_release);
+                std::cerr << "NATS connection failed: " << natsStatus_GetText(s) << std::endl;
+            }
         }
-    }).detach();
+    });
 
     return true;
 }
@@ -94,6 +126,11 @@ void NatsClient::UpdateError(const std::string& error) {
 }
 
 void NatsClient::Disconnect() {
+    m_stopRequested.store(true, std::memory_order_release);
+    if (m_connectThread.joinable()) {
+        m_connectThread.join();
+    }
+
     std::lock_guard<std::mutex> lock(m_stateMutex);
     if (m_nativeData) {
         NativeData* nd = (NativeData*)m_nativeData;
@@ -107,6 +144,7 @@ void NatsClient::Disconnect() {
         delete nd;
         m_nativeData = nullptr;
     }
+    m_status = "Disconnected";
     m_connected.store(false, std::memory_order_release);
 }
 

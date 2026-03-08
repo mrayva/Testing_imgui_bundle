@@ -8,6 +8,7 @@ if (DEFINED ENV{EMSDK} OR EMSCRIPTEN OR CMAKE_TOOLCHAIN_FILE MATCHES "Emscripten
 endif()
 
 project(KitchenSinkImgui VERSION 0.1.0 LANGUAGES CXX)
+include(CTest)
 
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -17,7 +18,7 @@ include(FetchContent)
 FetchContent_Declare(
     imgui_bundle
     GIT_REPOSITORY https://github.com/pthom/imgui_bundle.git
-    GIT_TAG        main # Or a specific version/commit
+    GIT_TAG        5e3c9049a8abe3d6125af995cfdc6224eaf9d574
 )
 
 # Enable FreeType for high-quality font rendering
@@ -68,7 +69,7 @@ set(BUILD_SQLITE3_CONNECTOR ON CACHE BOOL "" FORCE)
 FetchContent_Declare(
     sqlpp23
     GIT_REPOSITORY https://github.com/rbock/sqlpp23.git
-    GIT_TAG        main
+    GIT_TAG        4335893ead1480a5d7327a117a8ff0f8d096f5a3
 )
 FetchContent_MakeAvailable(imgui_bundle sqlpp23)
 
@@ -150,3 +151,39 @@ endif()
 # find_package(glfw3 CONFIG REQUIRED)
 # target_link_libraries(${PROJECT_NAME} PRIVATE glfw)
 
+if (BUILD_TESTING AND NOT EMSCRIPTEN)
+    add_executable(smoke_nats_lifecycle tests/smoke_nats_lifecycle.cpp nats_client_native.cpp)
+    target_include_directories(smoke_nats_lifecycle PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    target_link_libraries(smoke_nats_lifecycle PRIVATE ${CNATS_TARGET})
+    add_test(NAME smoke_nats_lifecycle COMMAND smoke_nats_lifecycle)
+
+    add_executable(selection_stability_test tests/selection_stability_test.cpp)
+    target_include_directories(selection_stability_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    target_include_directories(selection_stability_test PRIVATE ${PHMAP_INCLUDE_DIR})
+    target_link_libraries(selection_stability_test PRIVATE imgui reaction::reaction)
+    add_test(NAME selection_stability_test COMMAND selection_stability_test)
+endif()
+
+if (BUILD_TESTING AND EMSCRIPTEN)
+    add_library(smoke_wasm_nats_glue OBJECT nats_client_wasm.cpp)
+    add_executable(smoke_wasm_nats_runtime tests/smoke_wasm_nats_runtime.cpp nats_client_wasm.cpp)
+    target_include_directories(smoke_wasm_nats_runtime PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    set_target_properties(smoke_wasm_nats_runtime PROPERTIES SUFFIX ".js")
+    target_link_options(smoke_wasm_nats_runtime PRIVATE
+        "-sENVIRONMENT=node"
+        "-sEXIT_RUNTIME=1"
+    )
+
+    if (CMAKE_CROSSCOMPILING_EMULATOR)
+        add_test(NAME smoke_wasm_nats_runtime
+                 COMMAND ${CMAKE_CROSSCOMPILING_EMULATOR} $<TARGET_FILE:smoke_wasm_nats_runtime>)
+    else()
+        find_program(NODE_EXECUTABLE node)
+        if (NODE_EXECUTABLE)
+            add_test(NAME smoke_wasm_nats_runtime
+                     COMMAND ${NODE_EXECUTABLE} $<TARGET_FILE:smoke_wasm_nats_runtime>)
+        endif()
+    endif()
+
+    add_custom_target(smoke_wasm_build DEPENDS smoke_wasm_nats_glue smoke_wasm_nats_runtime)
+endif()

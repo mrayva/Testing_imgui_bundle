@@ -134,6 +134,13 @@ public:
         m_frozenRows = rows;
     }
 
+    void SetSort(int columnIndex, ImGuiSortDirection direction) {
+        m_sortSpecs[0].columnIndex = columnIndex;
+        m_sortSpecs[0].direction = direction;
+        m_sortSpecCount.store(1, std::memory_order_relaxed);
+        m_sortSpecsDirty.store(true, std::memory_order_release);
+    }
+
     // ---- Callbacks ----
 
     void SetRowColorCallback(RowColorCallback cb)       { m_rowColorCb = std::move(cb); }
@@ -148,12 +155,20 @@ public:
     void ClearSelection() { m_selection.Clear(); }
 
     std::vector<int> GetSelectedIndices() const {
+        int frontIdx = m_frontIndex.load(std::memory_order_acquire);
+        const auto& rows = m_rowBuffers[frontIdx];
+
         std::vector<int> result;
         void* it = nullptr;
         ImGuiID id;
         auto& sel = const_cast<ImGuiSelectionBasicStorage&>(m_selection);
         while (sel.GetNextSelectedItem(&it, &id)) {
-            result.push_back(static_cast<int>(id));
+            for (int rowIdx = 0; rowIdx < (int)rows.size(); ++rowIdx) {
+                if (static_cast<ImGuiID>(rows[rowIdx].id) == id) {
+                    result.push_back(rowIdx);
+                    break;
+                }
+            }
         }
         return result;
     }
@@ -308,8 +323,9 @@ public:
                     if (cc != 0) ImGui::TableSetBgColor(ImGuiTableBgTarget_CellBg, cc);
                 }
                 if (m_selectionEnabled) {
-                    ImGui::SetNextItemSelectionUserData(idx);
-                    bool selected = m_selection.Contains((ImGuiID)idx);
+                    ImGuiID selectionId = static_cast<ImGuiID>(row.id);
+                    ImGui::SetNextItemSelectionUserData(selectionId);
+                    bool selected = m_selection.Contains(selectionId);
                     char label[64];
                     snprintf(label, sizeof(label), "##row%d", idx);
                     ImGui::Selectable(label, selected,
@@ -395,9 +411,11 @@ public:
         ImGuiID id;
         auto& sel = const_cast<ImGuiSelectionBasicStorage&>(m_selection);
         while (sel.GetNextSelectedItem(&it, &id)) {
-            int idx = static_cast<int>(id);
-            if (idx >= 0 && idx < (int)rows.size()) {
-                text += rows[idx].idStr + '\t' + rows[idx].elem1Str + '\t' + rows[idx].elem2Str + '\n';
+            for (const auto& row : rows) {
+                if (static_cast<ImGuiID>(row.id) == id) {
+                    text += row.idStr + '\t' + row.elem1Str + '\t' + row.elem2Str + '\n';
+                    break;
+                }
             }
         }
 

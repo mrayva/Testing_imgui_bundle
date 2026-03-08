@@ -8,8 +8,8 @@
 #include <any>
 #include <algorithm>
 #include <set>
+#include <iostream>
 #include "imgui.h"
-#include "database_manager.h"
 
 namespace db {
 
@@ -471,8 +471,8 @@ public:
 
                         // Selection: render selectable in first column
                         if (m_selectionEnabled && col == 0) {
-                            ImGui::SetNextItemSelectionUserData(idx);
-                            bool isSelected = m_selection.Contains((ImGuiID)idx);
+                            ImGui::SetNextItemSelectionUserData(dataIdx);
+                            bool isSelected = m_selection.Contains((ImGuiID)dataIdx);
 
                             // Selectable spanning all columns for row selection
                             char label[64];

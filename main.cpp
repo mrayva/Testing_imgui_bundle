@@ -16,6 +16,7 @@
 #include <thread>
 #include <atomic>
 #include <mutex>
+#include <memory>
 #include <condition_variable>
 #include <sqlpp23/sqlpp23.h>
 #include "database/database_manager.h"
@@ -35,7 +36,7 @@ static int g_GlobalFontIdx = 0;
 static std::vector<std::string> g_db_results;
 
 // Async Table Widget (Zero-Lock Rendering)
-static db::AsyncTableWidget* g_asyncTable = nullptr;
+static std::unique_ptr<db::AsyncTableWidget> g_asyncTable;
 static std::thread g_refreshThread;
 static std::atomic<bool> g_refreshRunning{false};
 static std::mutex g_refreshMutex;
@@ -50,15 +51,58 @@ static char g_natsUrl[256] = "wss://demo.nats.io:8443";
 static char g_natsSubject[256] = "imgui.demo";
 static char g_natsMessage[256] = "Hello from ImGui!";
 static std::vector<std::string> g_natsLog;
+static std::vector<std::string> g_errorLog;
+static std::vector<std::string> g_dbStatusLog;
+static std::vector<std::string> g_natsStatusLog;
+static constexpr std::size_t kMaxErrorLogEntries = 100;
 
 // Reactive List Widget (phmap-backed, all platforms)
 using DemoCollection = reactive::ReactiveTwoFieldCollection<double, long>;
-static DemoCollection* g_reactiveCollection = nullptr;
-static db::ReactiveListWidget<DemoCollection>* g_reactiveList = nullptr;
+static std::unique_ptr<DemoCollection> g_reactiveCollection;
+static std::unique_ptr<db::ReactiveListWidget<DemoCollection>> g_reactiveList;
 static std::thread g_reactiveRefreshThread;
 static std::atomic<bool> g_reactiveRefreshRunning{false};
 static std::mutex g_reactiveRefreshMutex;
 static std::condition_variable g_reactiveRefreshCV;
+
+static void PushUiError(const std::string& message) {
+    if (g_errorLog.size() >= kMaxErrorLogEntries) {
+        g_errorLog.erase(g_errorLog.begin());
+    }
+    g_errorLog.push_back(message);
+}
+
+static void PushUiError(const std::string& context, const std::exception& e) {
+    PushUiError(context + ": " + e.what());
+}
+
+static void PushStatusLine(std::vector<std::string>& target, const std::string& message) {
+    if (target.size() >= kMaxErrorLogEntries) {
+        target.erase(target.begin());
+    }
+    target.push_back(message);
+}
+
+static void RenderStatusWidget(const char* title, const char* clearId, const std::string& latestError,
+                               std::vector<std::string>& log) {
+    ImGui::Separator();
+    ImGui::TextUnformatted(title);
+    if (!latestError.empty()) {
+        ImGui::TextColored(ImVec4(1, 0.4f, 0.4f, 1), "Latest: %s", latestError.c_str());
+    } else {
+        ImGui::TextDisabled("Latest: none");
+    }
+    ImGui::SameLine();
+    if (ImGui::SmallButton(clearId)) {
+        log.clear();
+    }
+    if (!log.empty() && ImGui::TreeNode((std::string(title) + " History").c_str())) {
+        for (const auto& entry : log) {
+            ImGui::TextUnformatted(entry.c_str());
+        }
+        ImGui::TreePop();
+    }
+}
 
 void Gui() {
     auto& io = ImGui::GetIO();
@@ -67,6 +111,19 @@ void Gui() {
     }
 
     ImGui::Text("Welcome to the ImGui Bundle Kitchen Sink!");
+        if (!g_errorLog.empty()) {
+            ImGui::TextColored(ImVec4(1, 0.4f, 0.4f, 1), "Latest Error: %s", g_errorLog.back().c_str());
+            ImGui::SameLine();
+            if (ImGui::SmallButton("Clear Errors")) {
+                g_errorLog.clear();
+            }
+            if (ImGui::TreeNode("Error Log")) {
+                for (const auto& entry : g_errorLog) {
+                    ImGui::TextUnformatted(entry.c_str());
+                }
+                ImGui::TreePop();
+            }
+        }
         ImGui::Separator();
 
         static float f = 0.0f;
@@ -172,7 +229,10 @@ void Gui() {
                                      test_db::foo.Name = name,
                                      test_db::foo.HasFun = hasFun));
                         }
-                    } catch (...) {}
+                    } catch (const std::exception& e) {
+                        PushUiError("Add Rows failed", e);
+                        PushStatusLine(g_dbStatusLog, std::string("Add Rows failed: ") + e.what());
+                    }
                     g_refreshCV.notify_one();
                 }
 
@@ -206,7 +266,10 @@ void Gui() {
                                 .set(test_db::foo.Name = name, test_db::foo.HasFun = hasFun)
                                 .where(test_db::foo.Id == id));
                         }
-                    } catch (...) {}
+                    } catch (const std::exception& e) {
+                        PushUiError("Update Rows failed", e);
+                        PushStatusLine(g_dbStatusLog, std::string("Update Rows failed: ") + e.what());
+                    }
                     g_refreshCV.notify_one();
                 }
 
@@ -238,6 +301,7 @@ void Gui() {
                         lastError.clear();
                     } catch (const std::exception& e) {
                         lastError = e.what();
+                        PushStatusLine(g_dbStatusLog, "Insert Random Row failed: " + lastError);
                     }
                 }
 
@@ -253,13 +317,10 @@ void Gui() {
                         lastError.clear();
                     } catch (const std::exception& e) {
                         lastError = e.what();
+                        PushStatusLine(g_dbStatusLog, "Select All Rows failed: " + lastError);
                     }
                 }
-
-                if (!lastError.empty()) {
-                    ImGui::TextColored(ImVec4(1, 0, 0, 1), "Error: %s", lastError.c_str());
-                    if (ImGui::Button("Clear Error")) lastError.clear();
-                }
+                RenderStatusWidget("Database Status", "Clear DB Status", lastError, g_dbStatusLog);
 
                 ImGui::Separator();
                 ImGui::Text("Results:");
@@ -277,7 +338,10 @@ void Gui() {
                             db.GetConnection()(sqlpp::insert_into(test_db::foo)
                                                    .set(test_db::foo.Id = 1, test_db::foo.Name = "Initial User",
                                                         test_db::foo.HasFun = true));
-                        } catch (...) {}
+                        } catch (const std::exception& e) {
+                            PushUiError("Retry Init failed", e);
+                            PushStatusLine(g_dbStatusLog, std::string("Retry Init failed: ") + e.what());
+                        }
                     }
                 }
             }
@@ -435,9 +499,12 @@ void Gui() {
 
             ImGui::Text("Status: %s", g_natsClient.GetConnectionStatus().c_str());
             std::string lastErr = g_natsClient.GetLastError();
-            if (!lastErr.empty()) {
-                ImGui::TextColored(ImVec4(1, 0, 0, 1), "Error: %s", lastErr.c_str());
+            static std::string s_prevNatsError;
+            if (!lastErr.empty() && lastErr != s_prevNatsError) {
+                PushStatusLine(g_natsStatusLog, lastErr);
             }
+            s_prevNatsError = lastErr;
+            RenderStatusWidget("NATS Status", "Clear NATS Status", lastErr, g_natsStatusLog);
 
             ImGui::Separator();
             ImGui::InputText("Subject", g_natsSubject, sizeof(g_natsSubject));
@@ -495,11 +562,12 @@ int main(int, char**) {
                 .set(test_db::foo.Id = i, test_db::foo.Name = name, test_db::foo.HasFun = hasFun));
         }
     } catch (const std::exception& e) {
-        // Handle error - will show in UI
+        PushUiError("Database seed failed", e);
+        PushStatusLine(g_dbStatusLog, std::string("Database seed failed: ") + e.what());
     }
 
     // Setup Async Table Widget
-    g_asyncTable = new db::AsyncTableWidget();
+    g_asyncTable = std::make_unique<db::AsyncTableWidget>();
     g_asyncTable->AddColumn("ID", 80.0f);
     g_asyncTable->AddColumn("Name", 200.0f);
     g_asyncTable->AddColumn("Has Fun", 100.0f);
@@ -545,7 +613,7 @@ int main(int, char**) {
         try {
             auto& data = std::any_cast<const FooTypedData&>(row.userData);
             return std::any(data.id);
-        } catch (...) {
+        } catch (const std::bad_any_cast&) {
             return {};
         }
     });
@@ -556,7 +624,7 @@ int main(int, char**) {
         try {
             auto& data = std::any_cast<const FooTypedData&>(row.userData);
             return std::any(data.name);
-        } catch (...) {
+        } catch (const std::bad_any_cast&) {
             return {};
         }
     });
@@ -567,7 +635,7 @@ int main(int, char**) {
         try {
             auto& data = std::any_cast<const FooTypedData&>(row.userData);
             return std::any(data.hasFun);
-        } catch (...) {
+        } catch (const std::bad_any_cast&) {
             return {};
         }
     });
@@ -591,14 +659,14 @@ int main(int, char**) {
     });
 
     // Setup Reactive List Widget (phmap-backed collection)
-    g_reactiveCollection = new DemoCollection();
+    g_reactiveCollection = std::make_unique<DemoCollection>();
     for (int i = 0; i < 5; i++) {
         double price = faker::number::decimal(1.0, 500.0);
         long qty = faker::number::integer(1L, 1000L);
         g_reactiveCollection->push_back(price, qty);
     }
 
-    g_reactiveList = new db::ReactiveListWidget<DemoCollection>();
+    g_reactiveList = std::make_unique<db::ReactiveListWidget<DemoCollection>>();
     g_reactiveList->SetColumnHeaders("ID", "Price", "Quantity");
     g_reactiveList->SetColumnWidths(60.0f, 120.0f, 120.0f);
     g_reactiveList->EnableFilter(true);
@@ -708,18 +776,15 @@ int main(int, char**) {
     if (g_refreshThread.joinable()) {
         g_refreshThread.join();
     }
-    delete g_asyncTable;
-    g_asyncTable = nullptr;
+    g_asyncTable.reset();
 
     g_reactiveRefreshRunning = false;
     g_reactiveRefreshCV.notify_one();
     if (g_reactiveRefreshThread.joinable()) {
         g_reactiveRefreshThread.join();
     }
-    delete g_reactiveList;
-    g_reactiveList = nullptr;
-    delete g_reactiveCollection;
-    g_reactiveCollection = nullptr;
+    g_reactiveList.reset();
+    g_reactiveCollection.reset();
 
     return 0;
 }

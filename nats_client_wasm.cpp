@@ -1,7 +1,6 @@
 #ifdef __EMSCRIPTEN__
 #include "nats_client.h"
 #include <emscripten.h>
-#include <emscripten/bind.h>
 #include <iostream>
 
 // Global pointer to the current client instance for the callback
@@ -33,19 +32,30 @@ void OnNatsErrorJS(const char* error) {
 EM_JS(void, nats_connect_js, (const char* url_ptr), {
     const url = UTF8ToString(url_ptr);
 
-    (async() = > {
+    (async () => {
         try {
             console.log("NATS: Importing nats.ws from jsdelivr...");
-            // Use nats.ws ESM bundle from jsdelivr (official recommended URL)
             const natsModule = await import('https://cdn.jsdelivr.net/npm/nats.ws/esm/nats.js');
             const {connect, StringCodec} = natsModule;
 
             if (!connect) throw new Error("connect not found");
 
+            // Close previous connection if present.
+            if (window.nats_conn) {
+                try {
+                    await window.nats_conn.close();
+                } catch (closeErr) {
+                    console.warn("NATS: Failed closing existing connection", closeErr);
+                }
+            }
+
             console.log("NATS: Connecting to", url);
             const nc = await connect({servers: [url]});
             window.nats_conn = nc;
             window.nats_sc = StringCodec();
+            if (!window.nats_subs) {
+                window.nats_subs = new Map();
+            }
             console.log("NATS: Connected successfully");
 
             const statusStr = "Connected";
@@ -56,15 +66,16 @@ EM_JS(void, nats_connect_js, (const char* url_ptr), {
             _free(statusPtr);
         } catch (err) {
             console.error("NATS Connection Error:", err);
-            console.error("Error stack:", err.stack);
-            // Try multiple ways to get error info
+            if (err && err.stack) {
+                console.error("Error stack:", err.stack);
+            }
             let errMsg = "Connection failed: ";
-            if (err.message) {
+            if (err && err.message) {
                 errMsg += err.message;
-            } else if (typeof err == = 'string') {
+            } else if (typeof err === 'string') {
                 errMsg += err;
             } else {
-                errMsg += err.toString ? err.toString() : JSON.stringify(err);
+                errMsg += (err && err.toString) ? err.toString() : JSON.stringify(err);
             }
 
             const errLen = lengthBytesUTF8(errMsg) + 1;
@@ -96,11 +107,18 @@ EM_JS(void, nats_publish_js, (const char* subj_ptr, const char* data_ptr), {
 EM_JS(void, nats_subscribe_js, (const char* subj_ptr), {
     const subj = UTF8ToString(subj_ptr);
     if (window.nats_conn && window.nats_sc) {
-        (async() = > {
+        (async () => {
             const sub = window.nats_conn.subscribe(subj);
+            if (!window.nats_subs) {
+                window.nats_subs = new Map();
+            }
+            window.nats_subs.set(subj, sub);
             console.log("NATS: Subscribed to:", subj);
-            for
-                await(const m of sub) {
+            try {
+                for await (const m of sub) {
+                    if (!window.nats_conn) {
+                        break;
+                    }
                     const msgData = window.nats_sc.decode(m.data);
                     const subjStr = m.subject;
 
@@ -117,8 +135,58 @@ EM_JS(void, nats_subscribe_js, (const char* subj_ptr), {
                     _free(subjPtr);
                     _free(dataPtr);
                 }
+            } catch (err) {
+                const errMsg = "Subscribe error: " + (err && err.message ? err.message : String(err));
+                const errLen = lengthBytesUTF8(errMsg) + 1;
+                const errPtr = _malloc(errLen);
+                stringToUTF8(errMsg, errPtr, errLen);
+                _OnNatsErrorJS(errPtr);
+                _free(errPtr);
+            } finally {
+                if (window.nats_subs) {
+                    window.nats_subs.delete(subj);
+                }
+            }
         })();
     }
+});
+
+EM_JS(void, nats_disconnect_js, (), {
+    (async () => {
+        try {
+            if (window.nats_subs) {
+                for (const sub of window.nats_subs.values()) {
+                    try {
+                        sub.unsubscribe();
+                    } catch (subErr) {
+                        console.warn("NATS: unsubscribe failed", subErr);
+                    }
+                }
+                window.nats_subs.clear();
+            }
+            if (window.nats_conn) {
+                try {
+                    await window.nats_conn.drain();
+                } catch (drainErr) {
+                    console.warn("NATS: drain failed, closing", drainErr);
+                    try {
+                        await window.nats_conn.close();
+                    } catch (closeErr) {
+                        console.warn("NATS: close failed", closeErr);
+                    }
+                }
+            }
+        } finally {
+            window.nats_conn = undefined;
+            window.nats_sc = undefined;
+            const statusStr = "Disconnected";
+            const statusLen = lengthBytesUTF8(statusStr) + 1;
+            const statusPtr = _malloc(statusLen);
+            stringToUTF8(statusStr, statusPtr, statusLen);
+            _OnNatsStatusJS(statusPtr);
+            _free(statusPtr);
+        }
+    })();
 });
 
 NatsClient::NatsClient() {
@@ -130,17 +198,26 @@ NatsClient::~NatsClient() {
 }
 
 bool NatsClient::Connect(const std::string& url) {
+    if (url.empty()) {
+        std::lock_guard<std::mutex> lock(m_stateMutex);
+        m_status = "Failed";
+        m_lastError = "NATS URL cannot be empty";
+        m_connected.store(false, std::memory_order_release);
+        return false;
+    }
+
     {
         std::lock_guard<std::mutex> lock(m_stateMutex);
         m_status = "Connecting...";
         m_lastError = "";
     }
+    m_connected.store(false, std::memory_order_release);
     nats_connect_js(url.c_str());
     return true;
 }
 
 void NatsClient::Disconnect() {
-    // Implement disconnect JS if needed
+    nats_disconnect_js();
     m_connected.store(false, std::memory_order_release);
     std::lock_guard<std::mutex> lock(m_stateMutex);
     m_status = "Disconnected";
