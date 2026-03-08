@@ -71,7 +71,14 @@ FetchContent_Declare(
     GIT_REPOSITORY https://github.com/rbock/sqlpp23.git
     GIT_TAG        4335893ead1480a5d7327a117a8ff0f8d096f5a3
 )
-FetchContent_MakeAvailable(imgui_bundle sqlpp23)
+set(MULTI_INDEX_LRU_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+set(MULTI_INDEX_LRU_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+FetchContent_Declare(
+    multi_index_lru
+    GIT_REPOSITORY https://github.com/mrayva/multi_index_lru.git
+    GIT_TAG        65c07e40c78345960fca10a0887cf074797a7116
+)
+FetchContent_MakeAvailable(imgui_bundle sqlpp23 multi_index_lru)
 
 # NATS Client logic
 if (EMSCRIPTEN)
@@ -139,6 +146,7 @@ target_link_libraries(${PROJECT_NAME} PRIVATE faker-cxx::faker-cxx)
 # sqlpp23::sqlite3 requires sqlite3 to be found
 find_package(SQLite3 REQUIRED)
 target_link_libraries(${PROJECT_NAME} PRIVATE sqlpp23 sqlpp23_sqlite3)
+target_link_libraries(${PROJECT_NAME} PRIVATE multi_index_lru::multi_index_lru)
 
 # Link NATS for native (cnats is found above in the NATS Client logic section)
 if (NOT EMSCRIPTEN)
@@ -162,6 +170,10 @@ if (BUILD_TESTING AND NOT EMSCRIPTEN)
     target_include_directories(selection_stability_test PRIVATE ${PHMAP_INCLUDE_DIR})
     target_link_libraries(selection_stability_test PRIVATE imgui reaction::reaction)
     add_test(NAME selection_stability_test COMMAND selection_stability_test)
+
+    add_executable(benchmark_async_table_paths tests/benchmark_async_table_paths.cpp)
+    target_include_directories(benchmark_async_table_paths PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    target_link_libraries(benchmark_async_table_paths PRIVATE imgui SQLite::SQLite3 sqlpp23_sqlite3 multi_index_lru::multi_index_lru)
 endif()
 
 if (BUILD_TESTING AND EMSCRIPTEN)

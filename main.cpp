@@ -7,6 +7,7 @@
 #include <vector>
 #include <string>
 #include <cmath>
+#include <cstdint>
 #include <faker-cxx/person.h>
 #include <faker-cxx/number.h>
 #include <sstream>
@@ -22,6 +23,7 @@
 #include "database/database_manager.h"
 #include "database/schemas/table_foo.h"
 #include "database/async_table_widget.h"
+#include "database/foo_multi_index_table_model.h"
 #include "nats_client.h"
 
 #include "database/reactive_two_field_collection.h"
@@ -65,6 +67,15 @@ static std::atomic<bool> g_reactiveRefreshRunning{false};
 static std::mutex g_reactiveRefreshMutex;
 static std::condition_variable g_reactiveRefreshCV;
 
+// Multi-index LRU model + AsyncTableWidget demo
+static std::unique_ptr<db::FooMultiIndexTableModel> g_multiIndexModel;
+static std::unique_ptr<db::AsyncTableWidget> g_multiIndexTable;
+static db::FooMultiIndexTableModel::Query g_multiIndexQuery;
+static char g_multiIndexPrefix[128] = "";
+static char g_multiIndexContains[128] = "";
+static int g_multiIndexHasFun = 0; // 0=Any, 1=Yes, 2=No
+static int g_multiIndexOrder = 0;  // FooMultiIndexTableModel::Order
+
 static void PushUiError(const std::string& message) {
     if (g_errorLog.size() >= kMaxErrorLogEntries) {
         g_errorLog.erase(g_errorLog.begin());
@@ -102,6 +113,27 @@ static void RenderStatusWidget(const char* title, const char* clearId, const std
         }
         ImGui::TreePop();
     }
+}
+
+static void SyncMultiIndexQueryFromUi() {
+    g_multiIndexQuery.namePrefix = g_multiIndexPrefix;
+    g_multiIndexQuery.textContains = g_multiIndexContains;
+    switch (g_multiIndexHasFun) {
+        case 1:
+            g_multiIndexQuery.hasFunFilter = true;
+            break;
+        case 2:
+            g_multiIndexQuery.hasFunFilter = false;
+            break;
+        default:
+            g_multiIndexQuery.hasFunFilter.reset();
+            break;
+    }
+    if (g_multiIndexOrder < 0) g_multiIndexOrder = 0;
+    if (g_multiIndexOrder > static_cast<int>(db::FooMultiIndexTableModel::Order::NameDesc)) {
+        g_multiIndexOrder = 0;
+    }
+    g_multiIndexQuery.order = static_cast<db::FooMultiIndexTableModel::Order>(g_multiIndexOrder);
 }
 
 void Gui() {
@@ -280,6 +312,74 @@ void Gui() {
 
             } else {
                 ImGui::TextColored(ImVec4(1, 0, 0, 1), "Async table not initialized");
+            }
+        }
+
+        ImGui::Separator();
+
+        // Multi-index LRU AsyncTable demo
+        if (ImGui::CollapsingHeader("Multi-Index LRU Async Table")) {
+            if (g_multiIndexModel && g_multiIndexTable) {
+                ImGui::Text("Cache size: %zu", g_multiIndexModel->Size());
+
+                ImGui::SetNextItemWidth(180.0f);
+                ImGui::InputText("Name Prefix", g_multiIndexPrefix, sizeof(g_multiIndexPrefix));
+                ImGui::SameLine();
+                ImGui::SetNextItemWidth(180.0f);
+                ImGui::InputText("Name Contains", g_multiIndexContains, sizeof(g_multiIndexContains));
+
+                const char* hasFunOptions[] = {"Any HasFun", "HasFun = Yes", "HasFun = No"};
+                ImGui::SetNextItemWidth(180.0f);
+                ImGui::Combo("HasFun Filter", &g_multiIndexHasFun, hasFunOptions, IM_ARRAYSIZE(hasFunOptions));
+
+                const char* orderOptions[] = {"LRU (Most Recent First)", "ID Asc", "ID Desc", "Name Asc", "Name Desc"};
+                ImGui::SetNextItemWidth(220.0f);
+                ImGui::Combo("Row Order", &g_multiIndexOrder, orderOptions, IM_ARRAYSIZE(orderOptions));
+
+                if (ImGui::Button("Apply Query")) {
+                    SyncMultiIndexQueryFromUi();
+                    g_multiIndexTable->Refresh();
+                }
+                ImGui::SameLine();
+                if (ImGui::Button("Refresh Cache Table")) {
+                    g_multiIndexTable->Refresh();
+                }
+
+                static int miInsertCount = 1;
+                ImGui::SetNextItemWidth(120.0f);
+                ImGui::InputInt("Rows##mi_insert", &miInsertCount);
+                if (miInsertCount < 1) miInsertCount = 1;
+                if (miInsertCount > 10000) miInsertCount = 10000;
+                ImGui::SameLine();
+                if (ImGui::Button("Add Cache Rows")) {
+                    for (int i = 0; i < miInsertCount; ++i) {
+                        auto name = std::string(faker::person::fullName());
+                        bool hasFun = faker::number::integer(0, 1) == 1;
+                        g_multiIndexModel->Upsert(db::FooCacheEntry{static_cast<std::int64_t>(g_nextFooId++), name, hasFun});
+                    }
+                    g_multiIndexTable->Refresh();
+                }
+
+                static int miUpdateId = 1;
+                ImGui::SetNextItemWidth(120.0f);
+                ImGui::InputInt("ID##mi_update", &miUpdateId);
+                ImGui::SameLine();
+                if (ImGui::Button("Upsert ID")) {
+                    auto name = std::string(faker::person::fullName());
+                    bool hasFun = faker::number::integer(0, 1) == 1;
+                    g_multiIndexModel->Upsert(db::FooCacheEntry{static_cast<std::int64_t>(miUpdateId), name, hasFun});
+                    g_multiIndexTable->Refresh();
+                }
+                ImGui::SameLine();
+                if (ImGui::Button("Erase ID")) {
+                    g_multiIndexModel->EraseById(static_cast<std::int64_t>(miUpdateId));
+                    g_multiIndexTable->Refresh();
+                }
+
+                ImGui::Separator();
+                g_multiIndexTable->Render();
+            } else {
+                ImGui::TextColored(ImVec4(1, 0, 0, 1), "Multi-index table not initialized");
             }
         }
 
@@ -643,6 +743,23 @@ int main(int, char**) {
     // Initial load
     g_asyncTable->Refresh();
 
+    // Setup Multi-index LRU AsyncTable model/widget
+    g_multiIndexModel = std::make_unique<db::FooMultiIndexTableModel>(5000);
+    for (int i = 0; i < 5; ++i) {
+        auto name = std::string(faker::person::fullName());
+        bool hasFun = faker::number::integer(0, 1) == 1;
+        g_multiIndexModel->Upsert(db::FooCacheEntry{static_cast<std::int64_t>(i + 1), name, hasFun});
+    }
+    g_multiIndexTable = std::make_unique<db::AsyncTableWidget>();
+    db::FooMultiIndexTableModel::ConfigureAsyncTableColumns(*g_multiIndexTable);
+    SyncMultiIndexQueryFromUi();
+    g_multiIndexTable->SetRefreshCallback([](auto& rows) {
+        if (g_multiIndexModel) {
+            g_multiIndexModel->BuildAsyncRows(rows, g_multiIndexQuery);
+        }
+    });
+    g_multiIndexTable->Refresh();
+
     // Start background refresh thread (every 3 seconds, or on manual trigger)
     g_refreshRunning = true;
     g_refreshThread = std::thread([]() {
@@ -785,6 +902,8 @@ int main(int, char**) {
     }
     g_reactiveList.reset();
     g_reactiveCollection.reset();
+    g_multiIndexTable.reset();
+    g_multiIndexModel.reset();
 
     return 0;
 }

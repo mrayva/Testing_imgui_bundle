@@ -18,6 +18,7 @@
             "name": "cnats",
             "platform": "!emscripten"
         },
+        "boost-multi-index",
         "parallel-hashmap",
         "faker-cxx"
     ],
