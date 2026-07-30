@@ -83,7 +83,7 @@ The native-only `nats_asio` transport is disabled by default so the existing `cn
 
 ```bash
 cmake -S . -B build_nats_asio -DKITCHEN_SINK_WITH_NATS_ASIO=ON
-cmake --build build_nats_asio --target KitchenSinkImgui
+cmake --build build_nats_asio -j4
 ```
 
 Use GCC 14 or newer for this project. The pinned `sqlpp23` revision uses C++23 explicit-object parameters, which GCC 13 does not support; GCC 14 and GCC 15 are supported.
@@ -93,11 +93,10 @@ This adds a transport panel to the FlexBuffer table. It subscribes to a NATS sub
 With a local NATS server listening on `127.0.0.1:4222`, the native transport path can be exercised with:
 
 ```bash
-cmake --build build_nats_asio --target nats_asio_flexbuffer_e2e
-build_nats_asio/nats_asio_flexbuffer_e2e
+NATS_ASIO_E2E_PORT=4222 ctest --test-dir build_nats_asio --output-on-failure
 ```
 
-Set `NATS_ASIO_E2E_PORT` when using a dedicated local server port.
+The CTest command runs the nats_asio FlexBuffers end-to-end test and the existing native tests. Set `NATS_ASIO_E2E_PORT` to use a dedicated local server port.
 
 The payload shape is intentionally dynamic:
 
