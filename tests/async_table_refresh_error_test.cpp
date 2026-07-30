@@ -1,8 +1,10 @@
 #include "database/async_table_widget.h"
 
 #include <stdexcept>
+#include <cstdint>
 #include <string>
 #include <vector>
+#include <any>
 
 int main() {
     db::AsyncTableWidget widget;
@@ -30,5 +32,21 @@ int main() {
     if (widget.GetRowCount() != 1) {
         return 2;
     }
+
+    db::AsyncTableWidget mismatchedTypes;
+    mismatchedTypes.AddColumn("Value");
+    mismatchedTypes.SetColumnTypedExtractor(0, [](const db::AsyncTableWidget::Row& row) -> std::any {
+        return row.columns[0] == "number" ? std::any(std::int64_t{1}) : std::any(std::string("text"));
+    });
+    mismatchedTypes.SetRefreshCallback([](auto& rows) {
+        rows.push_back(db::AsyncTableWidget::Row{{"number"}});
+        rows.push_back(db::AsyncTableWidget::Row{{"text"}});
+    });
+    mismatchedTypes.SetSort(0, ImGuiSortDirection_Ascending);
+    mismatchedTypes.Refresh();
+    if (mismatchedTypes.GetRowCount() != 2) {
+        return 3;
+    }
+
     return 0;
 }

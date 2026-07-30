@@ -893,28 +893,40 @@ private:
 
         // Try common types in order of likelihood
         if (auto* av = std::any_cast<int64_t>(&aVal)) {
-            auto bv = std::any_cast<int64_t>(bVal);
-            return (*av < bv) ? -1 : (*av > bv) ? 1 : 0;
+            if (const auto* bv = std::any_cast<int64_t>(&bVal)) {
+                return (*av < *bv) ? -1 : (*av > *bv) ? 1 : 0;
+            }
+            return 0;
         }
         if (auto* av = std::any_cast<int>(&aVal)) {
-            auto bv = std::any_cast<int>(bVal);
-            return (*av < bv) ? -1 : (*av > bv) ? 1 : 0;
+            if (const auto* bv = std::any_cast<int>(&bVal)) {
+                return (*av < *bv) ? -1 : (*av > *bv) ? 1 : 0;
+            }
+            return 0;
         }
         if (auto* av = std::any_cast<double>(&aVal)) {
-            auto bv = std::any_cast<double>(bVal);
-            return (*av < bv) ? -1 : (*av > bv) ? 1 : 0;
+            if (const auto* bv = std::any_cast<double>(&bVal)) {
+                return (*av < *bv) ? -1 : (*av > *bv) ? 1 : 0;
+            }
+            return 0;
         }
         if (auto* av = std::any_cast<bool>(&aVal)) {
-            auto bv = std::any_cast<bool>(bVal);
-            return (*av < bv) ? -1 : (*av > bv) ? 1 : 0;
+            if (const auto* bv = std::any_cast<bool>(&bVal)) {
+                return (*av < *bv) ? -1 : (*av > *bv) ? 1 : 0;
+            }
+            return 0;
         }
         if (auto* av = std::any_cast<std::string>(&aVal)) {
-            auto& bv = std::any_cast<const std::string&>(bVal);
-            return av->compare(bv);
+            if (const auto* bv = std::any_cast<std::string>(&bVal)) {
+                return av->compare(*bv);
+            }
+            return 0;
         }
         if (auto* av = std::any_cast<std::string_view>(&aVal)) {
-            auto bv = std::any_cast<std::string_view>(bVal);
-            return av->compare(bv);
+            if (const auto* bv = std::any_cast<std::string_view>(&bVal)) {
+                return av->compare(*bv);
+            }
+            return 0;
         }
 
         std::cerr << "WARNING: Unknown type in typedExtractor, cannot sort.\n";
