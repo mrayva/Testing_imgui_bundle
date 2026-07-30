@@ -75,6 +75,8 @@ The DatabaseManager, OPFS mode, and Backup API all work correctly in WASM -- onl
 
 `database/flexbuffer_table_widget.h` provides `FlexbufferTableWidget<MaxBinarySize>` for binary snapshots received from another process or language. The transport owns the socket, NATS subscription, or IPC layer and calls `Publish()` with a complete FlexBuffer payload. The UI calls `Sync()` once at the start of each frame and then `Render()`.
 
+The demo's `Generate Faker Binary Frame` button uses the existing `faker-cxx` dependency to create a multi-row market-data payload with randomized symbols, venues, prices, and health flags. It still goes through the same FlexBuffer serialization and mailbox path as an external producer.
+
 The payload shape is intentionally dynamic:
 
 ```text

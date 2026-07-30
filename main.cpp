@@ -6,6 +6,7 @@
 #include "imgui-node-editor/imgui_node_editor.h"
 #include <vector>
 #include <string>
+#include <iterator>
 #include <cmath>
 #include <cstdint>
 #include <faker-cxx/person.h>
@@ -140,24 +141,23 @@ static void SyncMultiIndexQueryFromUi() {
 
 static void PublishFlexbufferDemoFrame() {
     static std::int64_t sequence = 1;
+    static constexpr const char* symbols[] = {"AAPL", "MSFT", "NVDA", "AMZN", "META", "TSLA", "ORCL", "INTC"};
+    static constexpr const char* venues[] = {"XNAS", "XNYS", "BATS", "IEXG"};
     flexbuffers::Builder builder;
     builder.Map([&]() {
         builder.Int("sequence", sequence);
         builder.Vector("rows", [&]() {
-            builder.Map([&]() {
-                builder.Int("id", 1);
-                builder.String("symbol", "AAPL");
-                builder.String("venue", "XNAS");
-                builder.Double("price", 181.25 + static_cast<double>(sequence % 10));
-                builder.Bool("healthy", true);
-            });
-            builder.Map([&]() {
-                builder.Int("id", 2);
-                builder.String("symbol", "MSFT");
-                builder.String("venue", "XNYS");
-                builder.Double("price", 412.50 - static_cast<double>(sequence % 7));
-                builder.Bool("healthy", true);
-            });
+            for (std::int64_t id = 1; id <= 24; ++id) {
+                const auto symbolIndex = faker::number::integer<std::size_t>(0, std::size(symbols) - 1);
+                const auto venueIndex = faker::number::integer<std::size_t>(0, std::size(venues) - 1);
+                builder.Map([&]() {
+                    builder.Int("id", id);
+                    builder.String("symbol", symbols[symbolIndex]);
+                    builder.String("venue", venues[venueIndex]);
+                    builder.Double("price", faker::number::decimal(10.0, 500.0));
+                    builder.Bool("healthy", faker::number::integer(0, 9) != 0);
+                });
+            }
         });
     });
     builder.Finish();
@@ -421,7 +421,7 @@ void Gui() {
 
         if (ImGui::CollapsingHeader("FlexBuffer Dynamic Table")) {
             ImGui::TextUnformatted("Binary payload shape: { rows: [ dynamic maps ] }");
-            if (ImGui::Button("Generate Sample Binary Frame")) {
+            if (ImGui::Button("Generate Faker Binary Frame")) {
                 PublishFlexbufferDemoFrame();
             }
             ImGui::SameLine();
