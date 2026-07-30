@@ -88,6 +88,13 @@ cmake --build build_nats_asio --target KitchenSinkImgui
 
 This adds a transport panel to the FlexBuffer table. It subscribes to a NATS subject and forwards each binary payload to `FlexbufferTableWidget::Publish()`. The ASIO callback copies the payload before returning; the UI still owns decoding and rendering.
 
+With a local NATS server listening on `127.0.0.1:4222`, the native transport path can be exercised with:
+
+```bash
+cmake --build build_nats_asio --target nats_asio_flexbuffer_e2e
+build_nats_asio/nats_asio_flexbuffer_e2e
+```
+
 The payload shape is intentionally dynamic:
 
 ```text

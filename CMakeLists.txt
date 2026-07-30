@@ -123,6 +123,14 @@ if (KITCHEN_SINK_WITH_NATS_ASIO AND NOT EMSCRIPTEN)
     target_sources(${PROJECT_NAME} PRIVATE database/nats_asio_flexbuffer_transport.cpp)
     target_compile_definitions(${PROJECT_NAME} PRIVATE KITCHEN_SINK_WITH_NATS_ASIO=1)
     target_link_libraries(${PROJECT_NAME} PRIVATE nats_asio::nats_asio)
+
+    add_executable(nats_asio_flexbuffer_e2e
+        tests/nats_asio_flexbuffer_e2e.cpp
+        database/nats_asio_flexbuffer_transport.cpp)
+    target_include_directories(nats_asio_flexbuffer_e2e PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    target_compile_definitions(nats_asio_flexbuffer_e2e PRIVATE FLATBUFFERS_LOCALE_INDEPENDENT=0)
+    target_link_libraries(nats_asio_flexbuffer_e2e PRIVATE
+        imgui flatbuffers::flatbuffers nats_asio::nats_asio)
 endif()
 
 # Link against imgui_bundle.
