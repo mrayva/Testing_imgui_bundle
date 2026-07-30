@@ -19,6 +19,13 @@ include(CTest)
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+if (CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND
+    CMAKE_CXX_COMPILER_VERSION VERSION_LESS 14)
+    message(FATAL_ERROR
+        "GCC 14 or newer is required by the pinned sqlpp23 C++23 headers; "
+        "configure with -DCMAKE_CXX_COMPILER=g++-14 or g++-15.")
+endif()
+
 # ImGui Bundle requires some specific setup
 include(FetchContent)
 FetchContent_Declare(

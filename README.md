@@ -86,6 +86,8 @@ cmake -S . -B build_nats_asio -DKITCHEN_SINK_WITH_NATS_ASIO=ON
 cmake --build build_nats_asio --target KitchenSinkImgui
 ```
 
+Use GCC 14 or newer for this project. The pinned `sqlpp23` revision uses C++23 explicit-object parameters, which GCC 13 does not support; GCC 14 and GCC 15 are supported.
+
 This adds a transport panel to the FlexBuffer table. It subscribes to a NATS subject and forwards each binary payload to `FlexbufferTableWidget::Publish()`. The ASIO callback copies the payload before returning; the UI still owns decoding and rendering.
 
 With a local NATS server listening on `127.0.0.1:4222`, the native transport path can be exercised with:
