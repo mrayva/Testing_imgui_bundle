@@ -26,6 +26,7 @@ jobs:
           VCPKG_ROOT: ${{ runner.temp }}/vcpkg
         run: |
           git clone --depth 1 https://github.com/microsoft/vcpkg.git "$VCPKG_ROOT"
+          git -C "$VCPKG_ROOT" fetch --no-tags origin 4f326c4072038c8624c36a8ba5ed23f616adda53
           "$VCPKG_ROOT/bootstrap-vcpkg.sh" -disableMetrics
 
       - name: Install NATS server
