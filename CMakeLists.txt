@@ -138,6 +138,7 @@ if (KITCHEN_SINK_WITH_NATS_ASIO AND NOT EMSCRIPTEN)
     target_compile_definitions(nats_asio_flexbuffer_e2e PRIVATE FLATBUFFERS_LOCALE_INDEPENDENT=0)
     target_link_libraries(nats_asio_flexbuffer_e2e PRIVATE
         imgui flatbuffers::flatbuffers nats_asio::nats_asio)
+    add_test(NAME nats_asio_flexbuffer_e2e COMMAND nats_asio_flexbuffer_e2e)
 endif()
 
 # Link against imgui_bundle.

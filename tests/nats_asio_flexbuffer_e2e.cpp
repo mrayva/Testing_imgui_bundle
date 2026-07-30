@@ -5,6 +5,7 @@
 #include <asio/co_spawn.hpp>
 #include <asio/use_future.hpp>
 #include <chrono>
+#include <cstdlib>
 #include <future>
 #include <iostream>
 #include <thread>
@@ -25,13 +26,15 @@ bool WaitFor(Predicate&& predicate, std::chrono::milliseconds timeout) {
 } // namespace
 
 int main() {
+    const auto portText = std::getenv("NATS_ASIO_E2E_PORT");
+    const auto port = static_cast<std::uint16_t>(portText ? std::atoi(portText) : 4222);
     db::FlexbufferTableWidget<4096> widget;
     widget.AddColumn("id", "ID");
     widget.AddColumn("symbol", "Symbol");
     widget.AddColumn("price", "Price");
 
     db::NatsAsioFlexbufferTransport transport(widget);
-    if (!transport.Connect("127.0.0.1", 4222, "imgui.flexbuffer.e2e")) return 1;
+    if (!transport.Connect("127.0.0.1", port, "imgui.flexbuffer.e2e")) return 1;
     if (!WaitFor([&] { return transport.GetStatus() == "Connected"; },
                  std::chrono::seconds(3))) {
         std::cerr << "transport did not connect: " << transport.GetLastError() << '\n';
@@ -47,7 +50,7 @@ int main() {
         std::nullopt);
     nats_asio::connect_config config;
     config.address = "127.0.0.1";
-    config.port = 4222;
+    config.port = port;
     publisher->start(config);
     std::thread publisherThread([&] { publisherIo.run(); });
 
@@ -90,13 +93,21 @@ int main() {
         [&] {
             widget.Sync();
             return widget.GetRowCount() == 1 && widget.GetCell(0, 0) == "42" &&
-                   widget.GetCell(0, 1) == "AAPL" && widget.GetCell(0, 2) == "181.25";
+                   widget.GetCell(0, 1) == "AAPL" &&
+                   widget.GetCell(0, 2) == "181.250000";
         },
         std::chrono::seconds(3));
 
     publisher->stop();
     publisherIo.stop();
     publisherThread.join();
+    if (!received) {
+        std::cerr << "transport status=" << transport.GetStatus()
+                  << " error=" << transport.GetLastError()
+                  << " rows=" << widget.GetRowCount()
+                  << " cells=" << widget.GetCell(0, 0) << ','
+                  << widget.GetCell(0, 1) << ',' << widget.GetCell(0, 2) << '\n';
+    }
     transport.Disconnect();
     return received ? 0 : 5;
 }

@@ -97,6 +97,8 @@ cmake --build build_nats_asio --target nats_asio_flexbuffer_e2e
 build_nats_asio/nats_asio_flexbuffer_e2e
 ```
 
+Set `NATS_ASIO_E2E_PORT` when using a dedicated local server port.
+
 The payload shape is intentionally dynamic:
 
 ```text

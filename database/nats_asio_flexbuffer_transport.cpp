@@ -82,6 +82,14 @@ bool NatsAsioFlexbufferTransport::Connect(std::string address, std::uint16_t por
             co_return;
         }
 
+        const auto flushStatus = co_await connection.flush();
+        if (flushStatus.failed()) {
+            std::lock_guard lock(m_impl->mutex);
+            m_impl->lastError = flushStatus.error();
+            m_impl->status = "Failed";
+            co_return;
+        }
+
         {
             std::lock_guard lock(m_impl->mutex);
             m_impl->subscription = std::move(subscription);
