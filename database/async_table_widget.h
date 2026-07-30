@@ -3,8 +3,10 @@
 #include <vector>
 #include <string>
 #include <atomic>
+#include <exception>
 #include <functional>
 #include <memory>
+#include <utility>
 #include <any>
 #include <algorithm>
 #include <set>
@@ -184,6 +186,7 @@ private:
 
     // Refresh callback (called on background thread)
     std::function<void(std::vector<Row>&)> m_refreshCallback;
+    std::function<void(const std::string&)> m_refreshErrorCallback;
 
     // ImGui table state
     std::string m_tableId;
@@ -256,6 +259,14 @@ public:
      * @param callback Function that fills vector with updated rows
      */
     void SetRefreshCallback(std::function<void(std::vector<Row>&)> callback) { m_refreshCallback = callback; }
+
+    /**
+     * @brief Set callback for refresh failures.
+     * The callback runs on the same thread that called Refresh().
+     */
+    void SetRefreshErrorCallback(std::function<void(const std::string&)> callback) {
+        m_refreshErrorCallback = std::move(callback);
+    }
 
     /**
      * @brief Set typed extractor for a column (enables type-safe sorting)
@@ -574,6 +585,17 @@ public:
      * Sorting is applied here (not in Render) to maintain zero-lock rendering.
      */
     void Refresh() {
+        try {
+            RefreshImpl();
+        } catch (const std::exception& e) {
+            ReportRefreshError(e.what());
+        } catch (...) {
+            ReportRefreshError("unknown refresh failure");
+        }
+    }
+
+private:
+    void RefreshImpl() {
         if (!m_refreshCallback) {
             return; // No refresh callback set
         }
@@ -635,6 +657,19 @@ public:
         // Atomic swap (release semantics - ensures all writes are visible)
         m_frontIndex.store(backIdx, std::memory_order_release);
     }
+
+    void ReportRefreshError(const std::string& message) noexcept {
+        std::cerr << "AsyncTableWidget refresh failed: " << message << '\n';
+        if (m_refreshErrorCallback) {
+            try {
+                m_refreshErrorCallback(message);
+            } catch (...) {
+                // Error reporting must not terminate the refresh caller.
+            }
+        }
+    }
+
+public:
 
     /**
      * @brief Manually set data (useful for initial population or testing)

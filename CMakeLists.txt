@@ -171,6 +171,11 @@ if (BUILD_TESTING AND NOT EMSCRIPTEN)
     target_link_libraries(selection_stability_test PRIVATE imgui reaction::reaction)
     add_test(NAME selection_stability_test COMMAND selection_stability_test)
 
+    add_executable(async_table_refresh_error_test tests/async_table_refresh_error_test.cpp)
+    target_include_directories(async_table_refresh_error_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    target_link_libraries(async_table_refresh_error_test PRIVATE imgui)
+    add_test(NAME async_table_refresh_error_test COMMAND async_table_refresh_error_test)
+
     add_executable(benchmark_async_table_paths tests/benchmark_async_table_paths.cpp)
     target_include_directories(benchmark_async_table_paths PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
     target_link_libraries(benchmark_async_table_paths PRIVATE imgui SQLite::SQLite3 sqlpp23_sqlite3 multi_index_lru::multi_index_lru)
