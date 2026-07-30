@@ -24,6 +24,7 @@
 #include "database/schemas/table_foo.h"
 #include "database/async_table_widget.h"
 #include "database/foo_multi_index_table_model.h"
+#include "database/flexbuffer_table_widget.h"
 #include "nats_client.h"
 
 #include "database/reactive_two_field_collection.h"
@@ -75,6 +76,7 @@ static char g_multiIndexPrefix[128] = "";
 static char g_multiIndexContains[128] = "";
 static int g_multiIndexHasFun = 0; // 0=Any, 1=Yes, 2=No
 static int g_multiIndexOrder = 0;  // FooMultiIndexTableModel::Order
+static std::unique_ptr<db::FlexbufferTableWidget<4096>> g_flexbufferTable;
 
 static void PushUiError(const std::string& message) {
     if (g_errorLog.size() >= kMaxErrorLogEntries) {
@@ -136,8 +138,40 @@ static void SyncMultiIndexQueryFromUi() {
     g_multiIndexQuery.order = static_cast<db::FooMultiIndexTableModel::Order>(g_multiIndexOrder);
 }
 
+static void PublishFlexbufferDemoFrame() {
+    static std::int64_t sequence = 1;
+    flexbuffers::Builder builder;
+    builder.Map([&]() {
+        builder.Int("sequence", sequence);
+        builder.Vector("rows", [&]() {
+            builder.Map([&]() {
+                builder.Int("id", 1);
+                builder.String("symbol", "AAPL");
+                builder.String("venue", "XNAS");
+                builder.Double("price", 181.25 + static_cast<double>(sequence % 10));
+                builder.Bool("healthy", true);
+            });
+            builder.Map([&]() {
+                builder.Int("id", 2);
+                builder.String("symbol", "MSFT");
+                builder.String("venue", "XNYS");
+                builder.Double("price", 412.50 - static_cast<double>(sequence % 7));
+                builder.Bool("healthy", true);
+            });
+        });
+    });
+    builder.Finish();
+    if (g_flexbufferTable) {
+        g_flexbufferTable->Publish(builder);
+    }
+    ++sequence;
+}
+
 void Gui() {
     auto& io = ImGui::GetIO();
+    if (g_flexbufferTable) {
+        g_flexbufferTable->Sync();
+    }
     if (g_GlobalFontIdx < io.Fonts->Fonts.Size) {
         ImGui::PushFont(io.Fonts->Fonts[g_GlobalFontIdx]);
     }
@@ -319,7 +353,7 @@ void Gui() {
 
         // Multi-index LRU AsyncTable demo
         if (ImGui::CollapsingHeader("Multi-Index LRU Async Table")) {
-            if (g_multiIndexModel && g_multiIndexTable) {
+        if (g_multiIndexModel && g_multiIndexTable) {
                 ImGui::Text("Cache size: %zu", g_multiIndexModel->Size());
 
                 ImGui::SetNextItemWidth(180.0f);
@@ -380,6 +414,20 @@ void Gui() {
                 g_multiIndexTable->Render();
             } else {
                 ImGui::TextColored(ImVec4(1, 0, 0, 1), "Multi-index table not initialized");
+            }
+        }
+
+        ImGui::Separator();
+
+        if (ImGui::CollapsingHeader("FlexBuffer Dynamic Table")) {
+            ImGui::TextUnformatted("Binary payload shape: { rows: [ dynamic maps ] }");
+            if (ImGui::Button("Generate Sample Binary Frame")) {
+                PublishFlexbufferDemoFrame();
+            }
+            ImGui::SameLine();
+            if (g_flexbufferTable) {
+                ImGui::Text("Dropped frames: %zu", g_flexbufferTable->MissedCount());
+                g_flexbufferTable->Render();
             }
         }
 
@@ -762,6 +810,17 @@ int main(int, char**) {
     });
     g_multiIndexTable->Refresh();
 
+    // FlexBuffer table demo. In production, Publish() is called by the
+    // external-process transport callback instead of this sample generator.
+    g_flexbufferTable = std::make_unique<db::FlexbufferTableWidget<4096>>();
+    g_flexbufferTable->AddColumn("id", "ID", 70.0f);
+    g_flexbufferTable->AddColumn("symbol", "Symbol", 100.0f);
+    g_flexbufferTable->AddColumn("venue", "Venue", 100.0f);
+    g_flexbufferTable->AddColumn("price", "Price", 100.0f);
+    g_flexbufferTable->EnableFilter(true);
+    g_flexbufferTable->EnableSelection(true);
+    PublishFlexbufferDemoFrame();
+
     // Start background refresh thread (every 3 seconds, or on manual trigger)
     g_refreshRunning = true;
     g_refreshThread = std::thread([]() {
@@ -906,6 +965,7 @@ int main(int, char**) {
     g_reactiveCollection.reset();
     g_multiIndexTable.reset();
     g_multiIndexModel.reset();
+    g_flexbufferTable.reset();
 
     return 0;
 }

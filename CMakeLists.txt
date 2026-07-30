@@ -145,8 +145,13 @@ target_link_libraries(${PROJECT_NAME} PRIVATE faker-cxx::faker-cxx)
 # Link against sqlpp23 and its sqlite3 connector
 # sqlpp23::sqlite3 requires sqlite3 to be found
 find_package(SQLite3 REQUIRED)
+find_package(flatbuffers CONFIG REQUIRED)
 target_link_libraries(${PROJECT_NAME} PRIVATE sqlpp23 sqlpp23_sqlite3)
 target_link_libraries(${PROJECT_NAME} PRIVATE multi_index_lru::multi_index_lru)
+target_link_libraries(${PROJECT_NAME} PRIVATE flatbuffers::flatbuffers)
+# The vcpkg Emscripten archive is built without ClassicLocale; use the
+# portable libc conversion functions in consumers as well.
+target_compile_definitions(${PROJECT_NAME} PRIVATE FLATBUFFERS_LOCALE_INDEPENDENT=0)
 
 # Link NATS for native (cnats is found above in the NATS Client logic section)
 if (NOT EMSCRIPTEN)
@@ -175,6 +180,12 @@ if (BUILD_TESTING AND NOT EMSCRIPTEN)
     target_include_directories(async_table_refresh_error_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
     target_link_libraries(async_table_refresh_error_test PRIVATE imgui)
     add_test(NAME async_table_refresh_error_test COMMAND async_table_refresh_error_test)
+
+    add_executable(flexbuffer_table_widget_test tests/flexbuffer_table_widget_test.cpp)
+    target_include_directories(flexbuffer_table_widget_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    target_link_libraries(flexbuffer_table_widget_test PRIVATE imgui flatbuffers::flatbuffers)
+    target_compile_definitions(flexbuffer_table_widget_test PRIVATE FLATBUFFERS_LOCALE_INDEPENDENT=0)
+    add_test(NAME flexbuffer_table_widget_test COMMAND flexbuffer_table_widget_test)
 
     add_executable(benchmark_async_table_paths tests/benchmark_async_table_paths.cpp)
     target_include_directories(benchmark_async_table_paths PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})

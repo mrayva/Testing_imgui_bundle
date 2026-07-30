@@ -10,6 +10,7 @@ A proof-of-concept C++ project integrating cutting-edge libraries using **C++23*
 - **SQLite3** -- database layer with memory, native-file, and OPFS modes
 - **Cross-platform font loading** -- automatic system font detection (Windows, macOS, Linux)
 - **WebAssembly** -- full Emscripten build producing `.wasm` + `.js` + `.data`
+- **FlexBuffers dynamic table** -- binary map/vector snapshots from external producers
 
 ## Prerequisites
 
@@ -69,6 +70,22 @@ gcc-15 miscompiles sqlpp23 code that relies on C++23 explicit object parameters 
 2. Gate sqlpp23 DSL calls with `#ifndef __EMSCRIPTEN__` and provide raw-SQL fallbacks.
 
 The DatabaseManager, OPFS mode, and Backup API all work correctly in WASM -- only the sqlpp23 compile-time DSL is affected.
+
+## FlexBuffers Dynamic Table
+
+`database/flexbuffer_table_widget.h` provides `FlexbufferTableWidget<MaxBinarySize>` for binary snapshots received from another process or language. The transport owns the socket, NATS subscription, or IPC layer and calls `Publish()` with a complete FlexBuffer payload. The UI calls `Sync()` once at the start of each frame and then `Render()`.
+
+The payload shape is intentionally dynamic:
+
+```text
+{
+  "rows": [
+    {"id": 1, "symbol": "AAPL", "price": 181.25}
+  ]
+}
+```
+
+Configure columns by map key with `AddColumn(key, header, width)`. The fixed mailbox rejects oversized payloads and drops frames when all three slots are occupied; `MissedCount()` exposes that pressure to the UI. The mailbox is single-producer/single-consumer and is not a cross-process shared-memory primitive by itself.
 
 ## License
 

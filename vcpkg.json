@@ -6,6 +6,7 @@
         "glad",
         "reaction",
         "sqlite3",
+        "flatbuffers",
         {
             "name": "plutosvg",
             "features": [
