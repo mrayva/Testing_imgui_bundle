@@ -11,6 +11,7 @@ concurrency:
 jobs:
   native-nats:
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
 
     steps:
       - name: Check out repository
@@ -28,6 +29,16 @@ jobs:
           git clone --depth 1 https://github.com/microsoft/vcpkg.git "$VCPKG_ROOT"
           git -C "$VCPKG_ROOT" fetch --no-tags origin 4f326c4072038c8624c36a8ba5ed23f616adda53
           "$VCPKG_ROOT/bootstrap-vcpkg.sh" -disableMetrics
+
+      - name: Cache vcpkg artifacts
+        uses: actions/cache@v4
+        with:
+          path: |
+            ${{ runner.temp }}/vcpkg/downloads
+            ${{ github.workspace }}/build-ci/vcpkg_installed
+          key: vcpkg-${{ runner.os }}-${{ hashFiles('vcpkg.json', 'CMakeLists.txt') }}
+          restore-keys: |
+            vcpkg-${{ runner.os }}-
 
       - name: Install NATS server
         run: go install github.com/nats-io/nats-server/v2@v2.14.3
