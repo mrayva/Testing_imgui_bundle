@@ -185,16 +185,18 @@ public:
                 return;
             }
 
-            out.push_back(AsyncTableWidget::Row{{std::to_string(entry.id),
-                                                entry.symbol,
-                                                entry.venue,
-                                                std::to_string(entry.ts),
-                                                FormatPrice(entry.price)},
-                                               MarketDataTypedData{entry.id,
-                                                                   entry.symbol,
-                                                                   entry.venue,
-                                                                   entry.ts,
-                                                                   entry.price}});
+            AsyncTableWidget::Row row{{std::to_string(entry.id),
+                                       entry.symbol,
+                                       entry.venue,
+                                       std::to_string(entry.ts),
+                                       FormatPrice(entry.price)},
+                                      MarketDataTypedData{entry.id,
+                                                          entry.symbol,
+                                                          entry.venue,
+                                                          entry.ts,
+                                                          entry.price}};
+            row.selectionId = static_cast<ImGuiID>(entry.id);
+            out.push_back(std::move(row));
             ++emitted;
         };
 

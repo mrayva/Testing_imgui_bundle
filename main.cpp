@@ -699,10 +699,12 @@ int main(int, char**) {
             FooTypedData typedData{id, name, hasFun};
 
             // Create row with BOTH strings (for display) and typed data (for sorting)
-            rows.push_back({
+            db::AsyncTableWidget::Row row{
                 {std::to_string(id), name, hasFun ? "Yes" : "No"}, // columns
                 typedData                                          // userData - MANDATORY!
-            });
+            };
+            row.selectionId = static_cast<ImGuiID>(id);
+            rows.push_back(std::move(row));
         }
     });
 

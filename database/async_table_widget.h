@@ -87,6 +87,10 @@ public:
         // This enables type-safe sorting and formatters without FooRow structs!
         std::any userData;
 
+        // Stable identity used by ImGui multi-selection. Zero preserves the
+        // legacy display-index fallback for callers that do not set an ID.
+        ImGuiID selectionId = 0;
+
         Row() = default;
 
         explicit Row(size_t numColumns) : columns(numColumns) {}
@@ -338,13 +342,20 @@ public:
      * @brief Get selected row indices from current front buffer
      */
     std::vector<int> GetSelectedIndices() const {
+        int frontIdx = m_frontIndex.load(std::memory_order_acquire);
+        const auto& rows = m_buffers[frontIdx];
         std::vector<int> result;
         void* it = nullptr;
         ImGuiID id;
         // const_cast needed because ImGui's GetNextSelectedItem isn't const
         auto& sel = const_cast<ImGuiSelectionBasicStorage&>(m_selection);
         while (sel.GetNextSelectedItem(&it, &id)) {
-            result.push_back(static_cast<int>(id));
+            for (int rowIndex = 0; rowIndex < static_cast<int>(rows.size()); ++rowIndex) {
+                if (SelectionIdForRow(rows[rowIndex], static_cast<size_t>(rowIndex)) == id) {
+                    result.push_back(rowIndex);
+                    break;
+                }
+            }
         }
         return result;
     }
@@ -471,8 +482,9 @@ public:
 
                         // Selection: render selectable in first column
                         if (m_selectionEnabled && col == 0) {
-                            ImGui::SetNextItemSelectionUserData(dataIdx);
-                            bool isSelected = m_selection.Contains((ImGuiID)dataIdx);
+                            const ImGuiID selectionId = SelectionIdForRow(rowData, static_cast<size_t>(dataIdx));
+                            ImGui::SetNextItemSelectionUserData(selectionId);
+                            bool isSelected = m_selection.Contains(selectionId);
 
                             // Selectable spanning all columns for row selection
                             char label[64];
@@ -805,11 +817,14 @@ public:
         ImGuiID id;
         auto& sel = const_cast<ImGuiSelectionBasicStorage&>(m_selection);
         while (sel.GetNextSelectedItem(&it, &id)) {
-            int idx = static_cast<int>(id);
-            if (idx >= 0 && idx < (int)rows.size()) {
-                for (size_t c = 0; c < rows[idx].columns.size(); c++) {
+            auto rowIt = std::find_if(rows.begin(), rows.end(), [id, &rows](const Row& row) {
+                const size_t rowIndex = static_cast<size_t>(&row - rows.data());
+                return SelectionIdForRow(row, rowIndex) == id;
+            });
+            if (rowIt != rows.end()) {
+                for (size_t c = 0; c < rowIt->columns.size(); c++) {
                     if (c > 0) text += '\t';
-                    text += rows[idx].columns[c];
+                    text += rowIt->columns[c];
                 }
                 text += '\n';
             }
@@ -819,6 +834,10 @@ public:
     }
 
 private:
+    static ImGuiID SelectionIdForRow(const Row& row, size_t rowIndex) {
+        return row.selectionId != 0 ? row.selectionId : static_cast<ImGuiID>(rowIndex);
+    }
+
     /**
      * @brief Compare two std::any values, returns -1, 0, or 1
      */

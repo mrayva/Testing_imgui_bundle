@@ -153,10 +153,12 @@ public:
                 return;
             }
 
-            out.push_back(AsyncTableWidget::Row{
+            AsyncTableWidget::Row row{
                 {std::to_string(entry.id), entry.name, entry.hasFun ? "Yes" : "No"},
                 FooTypedData{entry.id, entry.name, entry.hasFun}
-            });
+            };
+            row.selectionId = static_cast<ImGuiID>(entry.id);
+            out.push_back(std::move(row));
             ++emitted;
         };
 

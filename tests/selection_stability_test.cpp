@@ -55,35 +55,41 @@ int main() {
     std::vector<db::AsyncTableWidget::Row> firstRows;
     db::AsyncTableWidget::Row row1;
     row1.columns = {"1", "A"};
+    row1.selectionId = 101;
     firstRows.push_back(row1);
     db::AsyncTableWidget::Row row2;
     row2.columns = {"2", "B"};
+    row2.selectionId = 102;
     firstRows.push_back(row2);
     db::AsyncTableWidget::Row row3;
     row3.columns = {"3", "C"};
+    row3.selectionId = 103;
     firstRows.push_back(row3);
     asyncWidget.SetData(std::move(firstRows));
 
-    asyncWidget.GetSelection().SetItemSelected((ImGuiID)2, true);
+    asyncWidget.GetSelection().SetItemSelected((ImGuiID)102, true);
     auto asyncSelected = asyncWidget.GetSelectedIndices();
-    if (!Contains(asyncSelected, 2)) {
+    if (asyncSelected.size() != 1 || asyncSelected[0] != 1) {
         return 1;
     }
 
     std::vector<db::AsyncTableWidget::Row> secondRows;
     db::AsyncTableWidget::Row row4;
     row4.columns = {"3", "C"};
+    row4.selectionId = 103;
     secondRows.push_back(row4);
     db::AsyncTableWidget::Row row5;
     row5.columns = {"1", "A"};
+    row5.selectionId = 101;
     secondRows.push_back(row5);
     db::AsyncTableWidget::Row row6;
     row6.columns = {"2", "B"};
+    row6.selectionId = 102;
     secondRows.push_back(row6);
     asyncWidget.SetData(std::move(secondRows));
 
     asyncSelected = asyncWidget.GetSelectedIndices();
-    if (!Contains(asyncSelected, 2)) {
+    if (asyncSelected.size() != 1 || asyncSelected[0] != 2) {
         return 2;
     }
 
