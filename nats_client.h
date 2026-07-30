@@ -5,6 +5,7 @@
 #include <functional>
 #include <mutex>
 #include <atomic>
+#include <cstdint>
 #include <queue>
 #include <thread>
 
@@ -38,6 +39,7 @@ public:
 private:
     std::atomic<bool> m_connected{false};
     std::atomic<bool> m_stopRequested{false};
+    std::atomic<std::uint32_t> m_generation{0};
 
     mutable std::mutex m_stateMutex;
     std::string m_lastError;

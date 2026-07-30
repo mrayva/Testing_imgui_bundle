@@ -29,8 +29,9 @@ void OnNatsErrorJS(const char* error) {
 }
 }
 
-EM_JS(void, nats_connect_js, (const char* url_ptr), {
+EM_JS(void, nats_connect_js, (const char* url_ptr, unsigned int generation), {
     const url = UTF8ToString(url_ptr);
+    window.nats_generation = generation;
 
     (async () => {
         try {
@@ -39,6 +40,8 @@ EM_JS(void, nats_connect_js, (const char* url_ptr), {
             const {connect, StringCodec} = natsModule;
 
             if (!connect) throw new Error("connect not found");
+
+            if (window.nats_generation !== generation) return;
 
             // Close previous connection if present.
             if (window.nats_conn) {
@@ -49,8 +52,20 @@ EM_JS(void, nats_connect_js, (const char* url_ptr), {
                 }
             }
 
+            if (window.nats_generation !== generation) return;
+
             console.log("NATS: Connecting to", url);
             const nc = await connect({servers: [url]});
+
+            if (window.nats_generation !== generation) {
+                try {
+                    await nc.close();
+                } catch (closeErr) {
+                    console.warn("NATS: Failed closing stale connection", closeErr);
+                }
+                return;
+            }
+
             window.nats_conn = nc;
             window.nats_sc = StringCodec();
             if (!window.nats_subs) {
@@ -65,6 +80,8 @@ EM_JS(void, nats_connect_js, (const char* url_ptr), {
             _OnNatsStatusJS(statusPtr);
             _free(statusPtr);
         } catch (err) {
+            if (window.nats_generation !== generation) return;
+
             console.error("NATS Connection Error:", err);
             if (err && err.stack) {
                 console.error("Error stack:", err.stack);
@@ -106,17 +123,19 @@ EM_JS(void, nats_publish_js, (const char* subj_ptr, const char* data_ptr), {
 
 EM_JS(void, nats_subscribe_js, (const char* subj_ptr), {
     const subj = UTF8ToString(subj_ptr);
-    if (window.nats_conn && window.nats_sc) {
+    const conn = window.nats_conn;
+    const generation = window.nats_generation;
+    if (conn && window.nats_sc) {
         (async () => {
-            const sub = window.nats_conn.subscribe(subj);
+            const sub = conn.subscribe(subj);
             if (!window.nats_subs) {
                 window.nats_subs = new Map();
             }
-            window.nats_subs.set(subj, sub);
+            window.nats_subs.set(subj, {sub: sub, generation: generation});
             console.log("NATS: Subscribed to:", subj);
             try {
                 for await (const m of sub) {
-                    if (!window.nats_conn) {
+                    if (window.nats_generation !== generation || window.nats_conn !== conn) {
                         break;
                     }
                     const msgData = window.nats_sc.decode(m.data);
@@ -143,7 +162,8 @@ EM_JS(void, nats_subscribe_js, (const char* subj_ptr), {
                 _OnNatsErrorJS(errPtr);
                 _free(errPtr);
             } finally {
-                if (window.nats_subs) {
+                const current = window.nats_subs && window.nats_subs.get(subj);
+                if (current && current.generation === generation) {
                     window.nats_subs.delete(subj);
                 }
             }
@@ -151,13 +171,16 @@ EM_JS(void, nats_subscribe_js, (const char* subj_ptr), {
     }
 });
 
-EM_JS(void, nats_disconnect_js, (), {
+EM_JS(void, nats_disconnect_js, (unsigned int generation), {
+    window.nats_generation = generation;
     (async () => {
+        if (window.nats_generation !== generation) return;
+
         try {
             if (window.nats_subs) {
-                for (const sub of window.nats_subs.values()) {
+                for (const entry of window.nats_subs.values()) {
                     try {
-                        sub.unsubscribe();
+                        entry.sub.unsubscribe();
                     } catch (subErr) {
                         console.warn("NATS: unsubscribe failed", subErr);
                     }
@@ -165,18 +188,20 @@ EM_JS(void, nats_disconnect_js, (), {
                 window.nats_subs.clear();
             }
             if (window.nats_conn) {
+                const conn = window.nats_conn;
                 try {
-                    await window.nats_conn.drain();
+                    await conn.drain();
                 } catch (drainErr) {
                     console.warn("NATS: drain failed, closing", drainErr);
                     try {
-                        await window.nats_conn.close();
+                        await conn.close();
                     } catch (closeErr) {
                         console.warn("NATS: close failed", closeErr);
                     }
                 }
             }
         } finally {
+            if (window.nats_generation !== generation) return;
             window.nats_conn = undefined;
             window.nats_sc = undefined;
             const statusStr = "Disconnected";
@@ -198,6 +223,7 @@ NatsClient::~NatsClient() {
 }
 
 bool NatsClient::Connect(const std::string& url) {
+    const auto generation = m_generation.fetch_add(1, std::memory_order_acq_rel) + 1;
     if (url.empty()) {
         std::lock_guard<std::mutex> lock(m_stateMutex);
         m_status = "Failed";
@@ -212,12 +238,13 @@ bool NatsClient::Connect(const std::string& url) {
         m_lastError = "";
     }
     m_connected.store(false, std::memory_order_release);
-    nats_connect_js(url.c_str());
+    nats_connect_js(url.c_str(), generation);
     return true;
 }
 
 void NatsClient::Disconnect() {
-    nats_disconnect_js();
+    const auto generation = m_generation.fetch_add(1, std::memory_order_acq_rel) + 1;
+    nats_disconnect_js(generation);
     m_connected.store(false, std::memory_order_release);
     std::lock_guard<std::mutex> lock(m_stateMutex);
     m_status = "Disconnected";
