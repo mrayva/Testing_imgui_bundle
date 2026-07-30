@@ -139,6 +139,18 @@ if (KITCHEN_SINK_WITH_NATS_ASIO AND NOT EMSCRIPTEN)
     target_link_libraries(nats_asio_flexbuffer_e2e PRIVATE
         imgui flatbuffers::flatbuffers nats_asio::nats_asio)
     add_test(NAME nats_asio_flexbuffer_e2e COMMAND nats_asio_flexbuffer_e2e)
+
+    add_executable(nats_asio_server_restart_e2e
+        tests/nats_asio_server_restart_e2e.cpp
+        database/nats_asio_flexbuffer_transport.cpp)
+    target_include_directories(nats_asio_server_restart_e2e PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    target_compile_definitions(nats_asio_server_restart_e2e PRIVATE FLATBUFFERS_LOCALE_INDEPENDENT=0)
+    target_link_libraries(nats_asio_server_restart_e2e PRIVATE
+        imgui flatbuffers::flatbuffers nats_asio::nats_asio)
+    add_test(
+        NAME nats_asio_server_restart_e2e
+        COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tests/run_nats_asio_server_restart.sh
+                $<TARGET_FILE:nats_asio_server_restart_e2e>)
 endif()
 
 # Link against imgui_bundle.

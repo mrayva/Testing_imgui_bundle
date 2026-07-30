@@ -96,7 +96,7 @@ With a local NATS server listening on `127.0.0.1:4222`, the native transport pat
 NATS_ASIO_E2E_PORT=4222 ctest --test-dir build_nats_asio --output-on-failure
 ```
 
-The CTest command runs the nats_asio FlexBuffers end-to-end test and the existing native tests. Set `NATS_ASIO_E2E_PORT` to use a dedicated local server port.
+The CTest command runs the nats_asio FlexBuffers end-to-end test, an isolated server outage/restart test, and the existing native tests. The outage test starts and stops a temporary local server on port `14223`; it never touches the normal server on `4222`. Set `NATS_SERVER_BIN` if the `nats-server` executable is not at `/home/mrayva/nats-server`, or set `NATS_ASIO_RESTART_PORT` to choose another temporary port. Set `NATS_ASIO_E2E_PORT` to use a dedicated port for the normal end-to-end test.
 
 The payload shape is intentionally dynamic:
 
