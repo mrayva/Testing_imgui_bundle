@@ -5,9 +5,11 @@
 #include <asio/co_spawn.hpp>
 #include <asio/use_future.hpp>
 #include <chrono>
+#include <cstdint>
 #include <cstdlib>
 #include <future>
 #include <iostream>
+#include <string>
 #include <thread>
 #include <vector>
 
@@ -61,35 +63,41 @@ int main() {
         return 3;
     }
 
-    flexbuffers::Builder builder;
-    builder.Map([&]() {
-        builder.String("source", "nats_asio_e2e");
-        builder.Vector("rows", [&]() {
-            builder.Map([&]() {
-                builder.Int("id", 42);
-                builder.String("symbol", "AAPL");
-                builder.Double("price", 181.25);
+    auto publish = [&](std::int64_t id, std::string symbol,
+                       double price) {
+        flexbuffers::Builder builder;
+        builder.Map([&]() {
+            builder.String("source", "nats_asio_e2e");
+            builder.Vector("rows", [&]() {
+                builder.Map([&]() {
+                    builder.Int("id", id);
+                    builder.String("symbol", symbol);
+                    builder.Double("price", price);
+                });
             });
         });
-    });
-    builder.Finish();
+        builder.Finish();
 
-    auto payload = std::vector<char>(builder.GetBuffer().begin(), builder.GetBuffer().end());
-    auto publishFuture = asio::co_spawn(
-        publisherIo,
-        [publisher, payload = std::move(payload)]() mutable -> asio::awaitable<nats_asio::status> {
-            co_return co_await publisher->publish("imgui.flexbuffer.e2e", payload, std::nullopt);
-        },
-        asio::use_future);
-    const auto publishStatus = publishFuture.get();
-    if (publishStatus.failed()) {
+        auto payload = std::vector<char>(builder.GetBuffer().begin(), builder.GetBuffer().end());
+        auto publishFuture = asio::co_spawn(
+            publisherIo,
+            [publisher, payload = std::move(payload)]() mutable
+                -> asio::awaitable<nats_asio::status> {
+                co_return co_await publisher->publish(
+                    "imgui.flexbuffer.e2e", payload, std::nullopt);
+            },
+            asio::use_future);
+        return !publishFuture.get().failed();
+    };
+
+    if (!publish(42, "AAPL", 181.25)) {
         publisher->stop();
         publisherIo.stop();
         publisherThread.join();
         return 4;
     }
 
-    const bool received = WaitFor(
+    const bool firstReceived = WaitFor(
         [&] {
             widget.Sync();
             return widget.GetRowCount() == 1 && widget.GetCell(0, 0) == "42" &&
@@ -98,10 +106,59 @@ int main() {
         },
         std::chrono::seconds(3));
 
+    if (!firstReceived) {
+        std::cerr << "initial delivery failed: transport status=" << transport.GetStatus()
+                  << " error=" << transport.GetLastError() << " rows=" << widget.GetRowCount()
+                  << '\n';
+        publisher->stop();
+        publisherIo.stop();
+        publisherThread.join();
+        transport.Disconnect();
+        return 5;
+    }
+
+    transport.Disconnect();
+    if (!WaitFor([&] { return transport.GetStatus() == "Disconnected"; },
+                 std::chrono::seconds(3))) {
+        std::cerr << "transport did not disconnect cleanly\n";
+        publisher->stop();
+        publisherIo.stop();
+        publisherThread.join();
+        return 6;
+    }
+
+    if (!transport.Connect("127.0.0.1", port, "imgui.flexbuffer.e2e") ||
+        !WaitFor([&] { return transport.GetStatus() == "Connected"; },
+                 std::chrono::seconds(3))) {
+        std::cerr << "transport did not reconnect: " << transport.GetLastError() << '\n';
+        publisher->stop();
+        publisherIo.stop();
+        publisherThread.join();
+        transport.Disconnect();
+        return 7;
+    }
+
+    if (!publish(43, "MSFT", 421.5)) {
+        publisher->stop();
+        publisherIo.stop();
+        publisherThread.join();
+        transport.Disconnect();
+        return 8;
+    }
+
+    const bool reconnectedDelivery = WaitFor(
+        [&] {
+            widget.Sync();
+            return widget.GetRowCount() == 1 && widget.GetCell(0, 0) == "43" &&
+                   widget.GetCell(0, 1) == "MSFT" &&
+                   widget.GetCell(0, 2) == "421.500000";
+        },
+        std::chrono::seconds(3));
+
     publisher->stop();
     publisherIo.stop();
     publisherThread.join();
-    if (!received) {
+    if (!reconnectedDelivery) {
         std::cerr << "transport status=" << transport.GetStatus()
                   << " error=" << transport.GetLastError()
                   << " rows=" << widget.GetRowCount()
@@ -109,5 +166,5 @@ int main() {
                   << widget.GetCell(0, 1) << ',' << widget.GetCell(0, 2) << '\n';
     }
     transport.Disconnect();
-    return received ? 0 : 5;
+    return reconnectedDelivery ? 0 : 9;
 }
