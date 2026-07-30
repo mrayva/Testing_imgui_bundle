@@ -151,7 +151,7 @@ int main() {
             widget.Sync();
             return widget.GetRowCount() == 1 && widget.GetCell(0, 0) == "43" &&
                    widget.GetCell(0, 1) == "MSFT" &&
-                   widget.GetCell(0, 2) == "421.500000";
+                   widget.GetCell(0, 2) == "421.500000" && widget.MissedCount() == 0;
         },
         std::chrono::seconds(3));
 

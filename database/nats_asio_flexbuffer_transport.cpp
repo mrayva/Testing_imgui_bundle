@@ -69,6 +69,31 @@ bool NatsAsioFlexbufferTransport::Connect(std::string address, std::uint16_t por
             }
             co_return;
         };
+
+        // nats_asio restores active subscriptions before invoking this callback
+        // after a TCP reconnect. Only create the subscription on the first
+        // connection; subscribing again would duplicate every delivery.
+        bool alreadySubscribed = false;
+        {
+            std::lock_guard lock(m_impl->mutex);
+            alreadySubscribed = static_cast<bool>(m_impl->subscription);
+        }
+        if (alreadySubscribed) {
+            const auto flushStatus = co_await connection.flush();
+            if (flushStatus.failed()) {
+                std::lock_guard lock(m_impl->mutex);
+                m_impl->lastError = flushStatus.error();
+                m_impl->status = "Failed";
+                co_return;
+            }
+            if (m_impl->epoch.load(std::memory_order_acquire) != connectionEpoch) {
+                co_return;
+            }
+            std::lock_guard lock(m_impl->mutex);
+            m_impl->status = "Connected";
+            co_return;
+        }
+
         auto [subscription, status] = co_await connection.subscribe(m_impl->subject, callback);
         if (status.failed()) {
             std::lock_guard lock(m_impl->mutex);
