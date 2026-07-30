@@ -7,6 +7,7 @@
 #include <vector>
 #include <string>
 #include <iterator>
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <faker-cxx/person.h>
@@ -26,6 +27,9 @@
 #include "database/async_table_widget.h"
 #include "database/foo_multi_index_table_model.h"
 #include "database/flexbuffer_table_widget.h"
+#ifdef KITCHEN_SINK_WITH_NATS_ASIO
+#include "database/nats_asio_flexbuffer_transport.h"
+#endif
 #include "nats_client.h"
 
 #include "database/reactive_two_field_collection.h"
@@ -78,6 +82,9 @@ static char g_multiIndexContains[128] = "";
 static int g_multiIndexHasFun = 0; // 0=Any, 1=Yes, 2=No
 static int g_multiIndexOrder = 0;  // FooMultiIndexTableModel::Order
 static std::unique_ptr<db::FlexbufferTableWidget<4096>> g_flexbufferTable;
+#ifdef KITCHEN_SINK_WITH_NATS_ASIO
+static std::unique_ptr<db::NatsAsioFlexbufferTransport> g_natsAsioFlexbuffer;
+#endif
 
 static void PushUiError(const std::string& message) {
     if (g_errorLog.size() >= kMaxErrorLogEntries) {
@@ -429,6 +436,33 @@ void Gui() {
                 ImGui::Text("Dropped frames: %zu", g_flexbufferTable->MissedCount());
                 g_flexbufferTable->Render();
             }
+#ifdef KITCHEN_SINK_WITH_NATS_ASIO
+            ImGui::SeparatorText("Optional native nats_asio transport");
+            static char natsAsioAddress[128] = "127.0.0.1";
+            static char natsAsioSubject[128] = "imgui.flexbuffer";
+            static int natsAsioPort = 4222;
+            ImGui::InputText("Address", natsAsioAddress, sizeof(natsAsioAddress));
+            ImGui::InputInt("Port", &natsAsioPort);
+            ImGui::InputText("Binary subject", natsAsioSubject, sizeof(natsAsioSubject));
+            if (ImGui::Button("Connect nats_asio")) {
+                if (g_natsAsioFlexbuffer) {
+                    g_natsAsioFlexbuffer->Connect(natsAsioAddress,
+                                                  static_cast<std::uint16_t>(std::clamp(natsAsioPort, 1, 65535)),
+                                                  natsAsioSubject);
+                }
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("Disconnect nats_asio") && g_natsAsioFlexbuffer) {
+                g_natsAsioFlexbuffer->Disconnect();
+            }
+            if (g_natsAsioFlexbuffer) {
+                ImGui::Text("Transport: %s", g_natsAsioFlexbuffer->GetStatus().c_str());
+                const auto error = g_natsAsioFlexbuffer->GetLastError();
+                if (!error.empty()) {
+                    ImGui::TextWrapped("Error: %s", error.c_str());
+                }
+            }
+#endif
         }
 
         ImGui::Separator();
@@ -819,6 +853,9 @@ int main(int, char**) {
     g_flexbufferTable->AddColumn("price", "Price", 100.0f);
     g_flexbufferTable->EnableFilter(true);
     g_flexbufferTable->EnableSelection(true);
+#ifdef KITCHEN_SINK_WITH_NATS_ASIO
+    g_natsAsioFlexbuffer = std::make_unique<db::NatsAsioFlexbufferTransport>(*g_flexbufferTable);
+#endif
     PublishFlexbufferDemoFrame();
 
     // Start background refresh thread (every 3 seconds, or on manual trigger)
@@ -965,6 +1002,9 @@ int main(int, char**) {
     g_reactiveCollection.reset();
     g_multiIndexTable.reset();
     g_multiIndexModel.reset();
+#ifdef KITCHEN_SINK_WITH_NATS_ASIO
+    g_natsAsioFlexbuffer.reset();
+#endif
     g_flexbufferTable.reset();
 
     return 0;

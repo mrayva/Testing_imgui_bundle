@@ -1,5 +1,11 @@
 cmake_minimum_required(VERSION 3.22)
 
+option(KITCHEN_SINK_WITH_NATS_ASIO "Enable the optional native nats_asio transport" OFF)
+
+if (KITCHEN_SINK_WITH_NATS_ASIO AND NOT EMSCRIPTEN)
+    list(APPEND VCPKG_MANIFEST_FEATURES nats-asio)
+endif()
+
 # Workaround for WASM: ensure CMake recognizes the 32-bit architecture to prevent find_package rejections
 # Must be set BEFORE project() call
 if (DEFINED ENV{EMSDK} OR EMSCRIPTEN OR CMAKE_TOOLCHAIN_FILE MATCHES "Emscripten")
@@ -80,6 +86,18 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(imgui_bundle sqlpp23 multi_index_lru)
 
+if (KITCHEN_SINK_WITH_NATS_ASIO AND NOT EMSCRIPTEN)
+    set(NATS_ASIO_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+    set(NATS_ASIO_BUILD_SAMPLES OFF CACHE BOOL "" FORCE)
+    set(NATS_ASIO_INSTALL ON CACHE BOOL "" FORCE)
+    FetchContent_Declare(
+        nats_asio
+        GIT_REPOSITORY https://github.com/mrayva/nats_asio.git
+        GIT_TAG 36095e5c2ad5488b460d60e424f37be6404453ab
+    )
+    FetchContent_MakeAvailable(nats_asio)
+endif()
+
 # NATS Client logic
 if (EMSCRIPTEN)
     set(NATS_SOURCES nats_client_wasm.cpp)
@@ -100,6 +118,12 @@ else()
 endif()
 
 add_executable(${PROJECT_NAME} main.cpp ${NATS_SOURCES})
+
+if (KITCHEN_SINK_WITH_NATS_ASIO AND NOT EMSCRIPTEN)
+    target_sources(${PROJECT_NAME} PRIVATE database/nats_asio_flexbuffer_transport.cpp)
+    target_compile_definitions(${PROJECT_NAME} PRIVATE KITCHEN_SINK_WITH_NATS_ASIO=1)
+    target_link_libraries(${PROJECT_NAME} PRIVATE nats_asio::nats_asio)
+endif()
 
 # Link against imgui_bundle.
 target_link_libraries(${PROJECT_NAME} PRIVATE imgui_bundle)

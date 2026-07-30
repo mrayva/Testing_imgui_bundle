@@ -77,6 +77,17 @@ The DatabaseManager, OPFS mode, and Backup API all work correctly in WASM -- onl
 
 The demo's `Generate Faker Binary Frame` button uses the existing `faker-cxx` dependency to create a multi-row market-data payload with randomized symbols, venues, prices, and health flags. It still goes through the same FlexBuffer serialization and mailbox path as an external producer.
 
+### Optional native nats_asio transport
+
+The native-only `nats_asio` transport is disabled by default so the existing `cnats` and WASM paths remain unchanged. Enable it with:
+
+```bash
+cmake -S . -B build_nats_asio -DKITCHEN_SINK_WITH_NATS_ASIO=ON
+cmake --build build_nats_asio --target KitchenSinkImgui
+```
+
+This adds a transport panel to the FlexBuffer table. It subscribes to a NATS subject and forwards each binary payload to `FlexbufferTableWidget::Publish()`. The ASIO callback copies the payload before returning; the UI still owns decoding and rendering.
+
 The payload shape is intentionally dynamic:
 
 ```text

@@ -23,5 +23,24 @@
         "parallel-hashmap",
         "faker-cxx"
     ],
+    "features": {
+        "nats-asio": {
+            "description": "Dependencies for the optional native nats_asio transport",
+            "dependencies": [
+                "asio",
+                "concurrentqueue",
+                "fmt",
+                "gtl",
+                "libzip",
+                "magic-enum",
+                "nlohmann-json",
+                "openssl",
+                "simdjson",
+                "spdlog",
+                "stringzilla",
+                "zstd"
+            ]
+        }
+    },
     "builtin-baseline": "4f326c4072038c8624c36a8ba5ed23f616adda53"
 }
