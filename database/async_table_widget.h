@@ -11,6 +11,7 @@
 #include <algorithm>
 #include <set>
 #include <iostream>
+#include <mutex>
 #include "imgui.h"
 
 namespace db {
@@ -201,6 +202,7 @@ private:
 
     // Multi-column sort state (shared between GUI and background thread)
     static constexpr int kMaxSortSpecs = 4;
+    mutable std::mutex m_sortMutex;
     std::atomic<int> m_sortSpecCount{0};
     SortSpec m_sortSpecs[kMaxSortSpecs]; // Written by GUI thread, read by background thread
     std::atomic<bool> m_sortSpecsDirty{false}; // Signal that specs changed
@@ -432,11 +434,14 @@ public:
             if (ImGuiTableSortSpecs* sortSpecs = ImGui::TableGetSortSpecs()) {
                 if (sortSpecs->SpecsDirty) {
                     int count = std::min((int)sortSpecs->SpecsCount, kMaxSortSpecs);
-                    for (int i = 0; i < count; i++) {
-                        m_sortSpecs[i].columnIndex = sortSpecs->Specs[i].ColumnIndex;
-                        m_sortSpecs[i].direction = sortSpecs->Specs[i].SortDirection;
+                    {
+                        std::lock_guard<std::mutex> lock(m_sortMutex);
+                        for (int i = 0; i < count; i++) {
+                            m_sortSpecs[i].columnIndex = sortSpecs->Specs[i].ColumnIndex;
+                            m_sortSpecs[i].direction = sortSpecs->Specs[i].SortDirection;
+                        }
+                        m_sortSpecCount.store(count, std::memory_order_relaxed);
                     }
-                    m_sortSpecCount.store(count, std::memory_order_relaxed);
                     m_sortSpecsDirty.store(true, std::memory_order_release);
 
                     sortSpecs->SpecsDirty = false;
@@ -612,14 +617,16 @@ private:
         m_refreshCallback(backBuffer);
 
         // Apply multi-column sorting if requested
-        int specCount = m_sortSpecCount.load(std::memory_order_acquire);
-        if (specCount > 0) {
-            // Snapshot the sort specs (they may be updated by GUI thread)
-            SortSpec specs[kMaxSortSpecs];
+        int specCount = 0;
+        SortSpec specs[kMaxSortSpecs];
+        {
+            std::lock_guard<std::mutex> lock(m_sortMutex);
+            specCount = std::min(m_sortSpecCount.load(std::memory_order_relaxed), kMaxSortSpecs);
             for (int i = 0; i < specCount; i++) {
                 specs[i] = m_sortSpecs[i];
             }
-
+        }
+        if (specCount > 0) {
             // Validate all sort specs have typed extractors
             bool canSort = true;
             for (int i = 0; i < specCount; i++) {
@@ -823,9 +830,12 @@ public:
      * @brief Programmatically set sort (will apply on next Refresh)
      */
     void SetSort(int column, ImGuiSortDirection direction) {
-        m_sortSpecs[0].columnIndex = column;
-        m_sortSpecs[0].direction = direction;
-        m_sortSpecCount.store(1, std::memory_order_relaxed);
+        {
+            std::lock_guard<std::mutex> lock(m_sortMutex);
+            m_sortSpecs[0].columnIndex = column;
+            m_sortSpecs[0].direction = direction;
+            m_sortSpecCount.store(1, std::memory_order_relaxed);
+        }
         m_sortSpecsDirty.store(true, std::memory_order_release);
     }
 

@@ -9,6 +9,7 @@
 #include <sstream>
 #include <iomanip>
 #include <cstring>
+#include <mutex>
 #include <type_traits>
 #include "imgui.h"
 
@@ -135,9 +136,12 @@ public:
     }
 
     void SetSort(int columnIndex, ImGuiSortDirection direction) {
-        m_sortSpecs[0].columnIndex = columnIndex;
-        m_sortSpecs[0].direction = direction;
-        m_sortSpecCount.store(1, std::memory_order_relaxed);
+        {
+            std::lock_guard<std::mutex> lock(m_sortMutex);
+            m_sortSpecs[0].columnIndex = columnIndex;
+            m_sortSpecs[0].direction = direction;
+            m_sortSpecCount.store(1, std::memory_order_relaxed);
+        }
         m_sortSpecsDirty.store(true, std::memory_order_release);
     }
 
@@ -271,11 +275,14 @@ public:
         if (ImGuiTableSortSpecs* specs = ImGui::TableGetSortSpecs()) {
             if (specs->SpecsDirty) {
                 int count = std::min((int)specs->SpecsCount, kMaxSortSpecs);
-                for (int i = 0; i < count; i++) {
-                    m_sortSpecs[i].columnIndex = specs->Specs[i].ColumnIndex;
-                    m_sortSpecs[i].direction   = specs->Specs[i].SortDirection;
+                {
+                    std::lock_guard<std::mutex> lock(m_sortMutex);
+                    for (int i = 0; i < count; i++) {
+                        m_sortSpecs[i].columnIndex = specs->Specs[i].ColumnIndex;
+                        m_sortSpecs[i].direction   = specs->Specs[i].SortDirection;
+                    }
+                    m_sortSpecCount.store(count, std::memory_order_relaxed);
                 }
-                m_sortSpecCount.store(count, std::memory_order_relaxed);
                 m_sortSpecsDirty.store(true, std::memory_order_release);
                 specs->SpecsDirty = false;
             }
@@ -469,13 +476,16 @@ private:
     // ---- Sorting ----
 
     void ApplySort(std::vector<SnapshotRow>& rows) {
-        int specCount = m_sortSpecCount.load(std::memory_order_acquire);
-        if (specCount <= 0) return;
-
+        int specCount = 0;
         SortSpec specs[kMaxSortSpecs];
-        for (int i = 0; i < specCount; i++) {
-            specs[i] = m_sortSpecs[i];
+        {
+            std::lock_guard<std::mutex> lock(m_sortMutex);
+            specCount = std::min(m_sortSpecCount.load(std::memory_order_relaxed), kMaxSortSpecs);
+            for (int i = 0; i < specCount; i++) {
+                specs[i] = m_sortSpecs[i];
+            }
         }
+        if (specCount <= 0) return;
 
         std::stable_sort(rows.begin(), rows.end(),
             [&specs, specCount](const SnapshotRow& a, const SnapshotRow& b) {
@@ -531,6 +541,7 @@ private:
 
     // Sort
     static constexpr int kMaxSortSpecs = 4;
+    mutable std::mutex m_sortMutex;
     std::atomic<int>  m_sortSpecCount{0};
     SortSpec          m_sortSpecs[kMaxSortSpecs];
     std::atomic<bool> m_sortSpecsDirty{false};
