@@ -89,7 +89,7 @@ set(MULTI_INDEX_LRU_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 FetchContent_Declare(
     multi_index_lru
     GIT_REPOSITORY https://github.com/mrayva/multi_index_lru.git
-    GIT_TAG        65c07e40c78345960fca10a0887cf074797a7116
+    GIT_TAG        2814322bc21c8393a4a506f935fcfafbb67e7a99
 )
 FetchContent_MakeAvailable(imgui_bundle sqlpp23 multi_index_lru)
 
